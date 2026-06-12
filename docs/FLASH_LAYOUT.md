@@ -1,22 +1,31 @@
-# Flash layout
+# Flash & OTP layout
 
-The last six 4 KiB sectors of the Pico's 2 MiB QSPI flash hold persistent HSM
-state. `memory.x` carves them out of the firmware's `FLASH` region so code can
-never grow into them — the linker errors if the binary exceeds the firmware
+Persistent HSM state lives in two places on the Waveshare RP2350-One:
+
+- the last six 4 KiB sectors of the 4 MiB **QSPI flash** (records below) —
+  external, dumpable, holds only ciphertext and public data;
+- two pages of the RP2350's on-die **OTP** — holds the per-device wrapping
+  secret that makes the flash records chip-bound.
+
+`memory.x` carves the HSM sectors out of the firmware's `FLASH` region so code
+can never grow into them — the linker errors if the binary exceeds the firmware
 region, a hard ceiling protecting the key.
 
-| Region         | Offset     | Size      | Contents                                         |
-| -------------- | ---------- | --------- | ------------------------------------------------ |
-| BOOT2          | `0x000000` | 256 B     | second-stage bootloader (provided by embassy-rp) |
-| Firmware (XIP) | `0x000100` | ~1.99 MiB | code + rodata, ends at `0x1FA000`                |
-| CONFIG_A       | `0x1FA000` | 4 KiB     | device config record                             |
-| CONFIG_B       | `0x1FB000` | 4 KiB     | redundant config copy                            |
-| KEY_A          | `0x1FC000` | 4 KiB     | wrapped CA key record                            |
-| KEY_B          | `0x1FD000` | 4 KiB     | redundant key copy                               |
-| PIN_COUNTER    | `0x1FE000` | 4 KiB     | PIN attempt tick log                             |
-| RESERVED       | `0x1FF000` | 4 KiB     | future (RP2350 OTP shadow, audit log)            |
+## QSPI flash (4 MiB)
 
-Current firmware footprint is ≈188 KiB of the ~2 MiB firmware region.
+| Region         | Offset     | Size      | Contents                                  |
+| -------------- | ---------- | --------- | ----------------------------------------- |
+| Firmware (XIP) | `0x000000` | ~3.98 MiB | vector table, IMAGE_DEF block, code + rodata; ends at `0x3FA000` |
+| CONFIG_A       | `0x3FA000` | 4 KiB     | device config record                      |
+| CONFIG_B       | `0x3FB000` | 4 KiB     | redundant config copy                     |
+| KEY_A          | `0x3FC000` | 4 KiB     | wrapped CA key record                     |
+| KEY_B          | `0x3FD000` | 4 KiB     | redundant key copy                        |
+| PIN_COUNTER    | `0x3FE000` | 4 KiB     | PIN attempt tick log                      |
+| RESERVED       | `0x3FF000` | 4 KiB     | future (audit log)                        |
+
+There is no BOOT2 second-stage bootloader: the RP2350 bootrom boots directly
+from the `IMAGE_DEF` metadata block (`.start_block`, placed right after the
+vector table inside the first 4 KiB). Current firmware footprint is ≈190 KiB.
 
 ## Record format (CONFIG / KEY)
 
@@ -39,23 +48,54 @@ magic "UHSM" (u32) | version (u16) | seq (u32) | payload_len (u16) | payload | c
 
 ### KeyBlob payload
 
-`wrap_type (u8: 1=devKEK, 2=pinKEK) | aead_nonce[12] | pubkey[32] | ciphertext[32]
+`wrap_type (u8: 3=devKEK, 4=pinKEK) | aead_nonce[12] | pubkey[32] | ciphertext[32]
 | tag[16]`.
 
 - `pubkey` is stored **in the clear** so `getPublicKey` works while locked.
 - `ciphertext` is the 32-byte Ed25519 seed, AEAD-sealed with ChaCha20-Poly1305.
 - AEAD AAD = `wrap_type ‖ pubkey`, so a blob cannot be presented under a
   different wrap type or paired with a different public key.
+- Wrap types 1/2 were the RP2040-era (v1) wraps without the OTP binding; the
+  parser rejects them.
+
+## OTP allocation (on-die, 64 pages × 64 ECC rows × 16 data bits)
+
+| Rows (ECC space) | Page | Name | Written by |
+| --- | --- | --- | --- |
+| `0x000–0x003` | 0 | CHIPID (factory) — feeds `unique_id()` / the `serial` field | factory |
+| `0x040` | 1 | CRIT1: `SECURE_BOOT_ENABLE` bit0, `DEBUG_DISABLE` bit2, `GLITCH_DETECTOR_ENABLE` bit4, `GLITCH_DETECTOR_SENS` bits5–6 (raw, 8× redundant) | picotool, production runbook |
+| `0x048` / `0x04B` | 1 | BOOT_FLAGS0 (`DISABLE_BOOTSEL_USB_PICOBOOT_IFC`) / BOOT_FLAGS1 (`KEY_VALID`) | picotool, production runbook |
+| `0x080–0x08F` | 2 | BOOTKEY0 = SHA-256 of the secp256k1 boot public key | picotool via the seal-generated OTP JSON |
+| `0xF00–0xF11` | 60 | **device secret, slot B (fallback)**: rows 0–15 secret (32 B), row 16 marker `0xA5C3`, row 17 void `0xDEAD` | firmware, first boot |
+| `0xF40–0xF51` | 61 | **device secret, slot A (primary)**: same layout | firmware, first boot |
+| `0xFF9` / `0xFFB` | 63 | PAGE60_LOCK1 / PAGE61_LOCK1 = `0x3D3D3D` | firmware, right after a verified provision |
+
+### Device-secret lifecycle (`hsm-fw/src/otp_secret.rs`)
+
+- **First boot**: 32 bytes drawn through the health-checked, SHA-512-conditioned
+  DRBG (never raw TRNG); each ECC row written and read-back-verified; the
+  validity marker written **last** so a torn provisioning never looks valid;
+  then the page hard-locked. A failed slot is voided (`0xDEAD`) and the
+  fallback page used — worst case wastes 2 of 64 pages, never bricks.
+- **Hard lock** (`PAGEn_LOCK1 = 0x3D3D3D`, 3-byte majority): byte `0x3D` =
+  Secure **read-only**, Non-secure **inaccessible**, Bootloader
+  **inaccessible**. picotool/PICOBOOT can never read or write the page again.
+- **Every boot**: the secret is copied to RAM, then the page's `SW_LOCK`
+  register is set to inaccessible (writes OR — can only tighten) until the next
+  reset, so even secure-world code cannot re-read the page mid-session.
+- **Fail closed**: no valid slot ⇒ `device_secret()` errors, every KEK
+  operation returns `ERR_INTERNAL`, and `status` reports `otpSecret: false`.
 
 ## Key wrapping
 
-- **dev**: `KEK = HKDF-SHA256(flash unique id, "usbhsm-dev-kek-v1")`. Obfuscation
-  only — anyone who can read the flash can also read the unique id. Documented as
-  such; dev mode is for convenience, not protection.
-- **prod**: `KEK = Argon2id(PIN, salt, m=64 KiB, t=tuned, p=1)`. PIN correctness
-  *is* the AEAD tag check — there is no separate verifier that would offer a
-  faster brute-force oracle. The 64 KiB memory parameter is an RP2040 RAM
-  constraint; pair it with a strong passphrase (see `THREAT_MODEL.md`).
+- **dev**: `KEK = HKDF-SHA256(OTP secret, info = "usbhsm-dev-kek-v2")`. At rest
+  this is as strong as the OTP secret; possession of a running device still
+  equals signing (dev mode has no PIN by design).
+- **prod**: `KEK = HKDF-SHA256(salt = OTP secret, ikm = Argon2id(PIN, salt16,
+  m = 256 KiB, t = tuned, p = 1), info = "usbhsm-prod-kek-v2")`. PIN correctness
+  *is* the AEAD tag check — no separate verifier exists that would offer a
+  faster brute-force oracle. An offline attacker with a flash dump but no OTP
+  secret has nothing to grind against.
 
 ## PIN attempt counter
 
@@ -68,5 +108,5 @@ verification always costs an attempt; it cannot be used to brute-force the PIN
 for free. Up to 4096 attempts fit per erase, far above any sane `max_retries`.
 
 NOR note: every tick for counts < 256 lands in page 0, programmed incrementally
-(only ever clearing fresh bits, never re-programming a byte). The Pico's
-W25Q-class flash permits this.
+(only ever clearing fresh bits, never re-programming a byte). The W25Q-class
+flash permits this.

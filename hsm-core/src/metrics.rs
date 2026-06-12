@@ -8,8 +8,8 @@
 
 use crate::proto::{EnclaveCpuTimes, EnclaveMemoryStats, EnclaveMetricsResponse};
 
-/// RP2040 has 264 KiB of SRAM.
-const TOTAL_SRAM_BYTES: u64 = 264 * 1024;
+/// RP2350 has 520 KiB of SRAM (512 KiB striped main + 2 x 4 KiB scratch).
+const TOTAL_SRAM_BYTES: u64 = 520 * 1024;
 
 /// Build a metrics snapshot. `uptime_us` is the monotonic uptime; `heap_free`
 /// is the firmware's current free-heap estimate (0 if unknown, e.g. in the

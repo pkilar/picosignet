@@ -78,7 +78,7 @@ func Run(args []string) int {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `usbhsm — RP2040 SSH-certificate HSM companion
+	fmt.Fprint(os.Stderr, `usbhsm — RP2350 SSH-certificate HSM companion
 
 usage: usbhsm <command> [flags]
 

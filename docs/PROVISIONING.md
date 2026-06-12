@@ -1,13 +1,16 @@
 # Provisioning & deployment
 
-End-to-end setup, from a blank Pico to `ssh-cert-api` signing through the device.
+End-to-end setup, from a blank board to `ssh-cert-api` signing through the
+device. Target hardware: Waveshare RP2350-One (RP2350A, 4 MiB flash).
 
 ## 0. Build & flash the firmware
 
 ```sh
 make uf2
-# BOOTSEL flashing: hold BOOTSEL, plug the Pico in, then:
-cp target/thumbv6m-none-eabi/release/hsm-fw.uf2 /media/$USER/RPI-RP2/
+# BOOTSEL flashing: hold BOOTSEL, plug the board in, then either:
+cp target/thumbv8m.main-none-eabihf/release/hsm-fw.uf2 /run/media/$USER/RP2350/
+# or over picoboot (no drive mount needed):
+make flash-uf2
 # or, with a debug probe:
 make flash
 ```
@@ -16,7 +19,14 @@ The device enumerates as a USB CDC-ACM serial port (`1209:000A`, product
 `usbhsm`), discoverable at `/dev/serial/by-id/*usbhsm*`. All `usbhsm` commands
 accept `--port <path>` to override auto-discovery.
 
-## 1a. Dev mode (convenience; not physically secure)
+**First boot self-provisions the OTP device secret** (see
+`FLASH_LAYOUT.md`): the firmware burns a TRNG-generated 32-byte secret into an
+on-die OTP page and permanently locks the page against the bootloader and
+non-secure access. This is a one-time, per-chip event; `usbhsm status` should
+show `otp secret: true` from then on. Reflashing the firmware does not touch
+it.
+
+## 1a. Dev mode (no PIN; for development hosts)
 
 ```sh
 usbhsm init               # dev mode
@@ -25,8 +35,11 @@ usbhsm pubkey > cerberus-ca.pub
 usbhsm status
 ```
 
-The device is operational immediately on every plug-in. Use this where physical
-capture of the device is not in your threat model (see `THREAT_MODEL.md`).
+The device is operational immediately on every plug-in. The dev wrapping key is
+bound to the OTP device secret, so a flash chip-off dump alone cannot recover
+the CA key — but anyone holding the *running* device can sign, and until the
+secure-boot burn (below) anyone can also reflash it. Use dev mode where that is
+acceptable (see `THREAT_MODEL.md`).
 
 ## 1b. Production mode (PIN-protected)
 
@@ -38,14 +51,65 @@ usbhsm unlock                                  # prompts for the PIN
 usbhsm status                                  # state: prodReady
 ```
 
-Use a **strong passphrase** (e.g. 6-word diceware), not a short numeric PIN — the
-RP2040's flash is externally readable and the KDF is RAM-limited. Add
-`--wipe-on-lockout` if you prefer key destruction over availability after a
-brute-force attempt. Re-lock when idle with `usbhsm lock`; rotate the passphrase
-with `usbhsm change-pin`.
+Use a strong passphrase. The KEK is bound to the on-die OTP secret, so offline
+brute-force of a flash dump is no longer possible — the passphrase budget now
+defends against *online* guessing (rate-limited, ≈1 s Argon2id per attempt,
+lockout after `--max-retries`) and against an attacker who has also defeated
+the chip's OTP protections. Add `--wipe-on-lockout` if you prefer key
+destruction over availability after a brute-force attempt. Re-lock when idle
+with `usbhsm lock`; rotate the passphrase with `usbhsm change-pin`.
 
 To change modes later, `usbhsm factory-reset` (destroys the key) then `init`
 again — there is no in-place dev↔prod switch.
+
+## 1c. Production lockdown: secure boot (IRREVERSIBLE)
+
+Development devices stay freely reflashable. A *production* device should also
+refuse to run anything but our signed firmware — otherwise an attacker with
+physical access can flash key-exfiltrating firmware and wait for an unlock.
+This is a staged, partially **irreversible** process driven by
+`scripts/provision_production.sh`; a mistake at the wrong stage bricks the
+board, so the script gates every fuse write behind a typed confirmation.
+
+```sh
+make keygen          # one-time secp256k1 boot key -> keys/usbhsm-boot.pem
+                     #   BACK IT UP OFFLINE, TWICE. After P4, losing it
+                     #   permanently bricks firmware updates.
+make uf2-signed      # signed+sealed UF2 + keys/usbhsm-bootkey-otp.json
+
+usbhsm reboot-bootloader                  # device into BOOTSEL for each stage
+scripts/provision_production.sh P1       # flash SIGNED image; run full HIL
+scripts/provision_production.sh P2       # [BURN] boot-key hash (BOOTKEY0)
+scripts/provision_production.sh P3       # power-cycle check (nothing burned)
+scripts/provision_production.sh P4       # [BURN] SECURE_BOOT_ENABLE
+                                          #   = point of no return
+scripts/provision_production.sh P5       # [BURN] optional: glitch-detector
+                                          #   force-arm, debug disable,
+                                          #   PICOBOOT disable
+```
+
+Order of operations is the safety mechanism:
+
+- **P1** proves the *signed* image boots while the bootrom still ignores
+  signatures — validating the seal pipeline before anything irreversible.
+- **P2** burns only the key hash; the device still boots anything. Verify the
+  burned rows against `keys/usbhsm-bootkey-otp.json` (`picotool otp get`)
+  before going further.
+- **P4** flips enforcement. Immediately verify: the signed image boots,
+  `usbhsm status` shows `secure boot: true`, and an **unsigned** UF2 is
+  refused.
+- **P5** items are independent and each gated: ROM-level glitch-detector
+  force-arm, debug-port disable, and PICOBOOT disable (picotool stops working
+  forever; signed-UF2 drag-and-drop via the BOOTSEL drive remains — never also
+  disable the MSD interface or the device becomes un-updatable).
+
+Dry-run the whole sequence P1→P4 (including the unsigned-refused negative
+test) on a sacrificial board before touching a real production unit.
+
+Firmware updates after lockdown: build, `make uf2-signed`, reboot to BOOTSEL,
+copy the **signed** UF2. Anti-rollback versioning (`picotool seal --rollback`)
+is available if downgrade attacks enter your threat model; it burns an OTP row
+per version step.
 
 ## 2. Trust the CA on your SSH servers
 
@@ -108,8 +172,9 @@ network; by default, `init`/`unlock`/`generateKey`/etc. are local-CLI only.
 
 ```sh
 usbhsm self-test
-# runs the on-device KATs AND signs a throwaway key, verifying the certificate
-# against the device CA with x/crypto/ssh.
+# runs the on-device KATs (incl. the OTP-secret presence check) AND signs a
+# throwaway key, verifying the certificate against the device CA with
+# x/crypto/ssh.
 ```
 
 A full client flow then looks like cerberus's: `ssh-cert-api` authenticates and
@@ -125,8 +190,11 @@ certificate is byte-identical to one the enclave would have produced (proven by
   this automatically.
 - **Reboots**: dev devices reload the key automatically; prod devices come up
   `prodLocked` and need `unlock` again.
-- **Backups**: there is intentionally no key export. To survive device loss, run
-  two devices provisioned as the same CA — generate the CA seed out-of-band and
-  ... not possible (keys are device-generated). Instead, trust **two** CA public
-  keys on your servers (`TrustedUserCAKeys` accepts multiple lines), one per
-  device, and keep a spare device provisioned and stored securely.
+- **Security posture at a glance**: `usbhsm status` reports `otp secret`,
+  `glitch det` (detectors armed), `secure boot` (enforcement burned), and warns
+  if the last reset was a glitch-detector trigger.
+- **Backups**: there is intentionally no key export, and key blobs are bound to
+  the chip's OTP secret — a flash image is not a backup. To survive device
+  loss, trust **two** CA public keys on your servers (`TrustedUserCAKeys`
+  accepts multiple lines), one per device, and keep a spare device provisioned
+  and stored securely.

@@ -27,7 +27,7 @@ const (
 )
 
 // DefaultTimeout bounds a single request/response exchange. It must exceed the
-// device's slowest operation (Argon2id unlock on the RP2040).
+// device's slowest operation (Argon2id unlock).
 const DefaultTimeout = 10 * time.Second
 
 // maxLine caps an inbound response line.

@@ -1,4 +1,14 @@
-# usbhsm — RP2040 USB HSM for SSH Certificate Signing
+# usbhsm — USB HSM for SSH Certificate Signing (original implementation plan)
+
+> **Superseded note (2026-06-12, v0.3.0):** the project is now **RP2350-only**.
+> RP2040 support was removed entirely in favor of the RP2350's security
+> hardware: hardware TRNG, a per-device wrapping secret locked in on-die OTP
+> (both KEKs bound to it — flash dumps alone are useless), voltage-glitch
+> detectors armed at boot, and a gated production secure-boot pipeline
+> (`scripts/provision_production.sh`). Target board: Waveshare RP2350-One.
+> See `docs/THREAT_MODEL.md` and `docs/FLASH_LAYOUT.md` for the current
+> design. The plan below is the original RP2040 (v0.1–v0.2) record; its
+> RP2040-specific sections are historical.
 
 ## Context
 

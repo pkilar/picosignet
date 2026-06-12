@@ -99,19 +99,28 @@ Error object: `{"code":"ERR_*","message":"…","remainingAttempts":N,"backoffMs"
 
 `status` payload: `state` (`uninitialized`/`devReady`/`prodLocked`/`prodReady`/
 `lockedOut`), `mode`, `keyPresent`, `unlocked`, `clockSet`, `unixSeconds`,
-`uptimeMs`, `retryRemaining` (prod), `fwVersion`, `serial` (chip unique id hex),
-`heapFreeBytes`.
+`uptimeMs`, `retryRemaining` (prod), `fwVersion`, `serial` (chip id hex, from
+OTP), `heapFreeBytes`, plus the security posture: `otpSecret` (per-device
+wrapping secret present and loaded), `glitchArmed` (voltage-glitch detectors
+armed), `secureBoot` (bootrom signed-boot enforcement burned), `glitchReset`
+(the last chip reset was a glitch-detector trigger). The simulator reports
+`otpSecret:true` (mock secret) and the other three false.
 
 `selfTest` payload: `{"ok":bool,"tests":{"ed25519Kat","sha2Kat","aeadKat",
-"drbgHealth","flashCrc"}}` each `"pass"`/`"fail"`.
+"drbgHealth","flashCrc","otpSecret"}}` each `"pass"`/`"fail"`.
 
 ### Notable behaviors
 
-- **Time**: the RP2040 has no RTC and the signing protocol carries no timestamp.
-  Push wall-clock time with `setTime`; the device tracks it as `monotonic +
-  offset`. Until time is set, `signSshKey` fails closed with
+- **Time**: the device has no battery-backed RTC and the signing protocol
+  carries no timestamp. Push wall-clock time with `setTime`; the device tracks
+  it as `monotonic + offset`. Until time is set, `signSshKey` fails closed with
   `{"error":"device clock not set; send hsm.setTime first"}`. The bridge sends
   `setTime` on connect and every 5 minutes.
+- **Entropy**: the RP2350 hardware TRNG is sampled raw (its built-in
+  post-processing bypassed), health-checked on-device (repetition-count +
+  adaptive-proportion per SP 800-90B), then SHA-512-conditioned into a ChaCha20
+  DRBG. `addEntropy` mixes host-supplied bytes in additively — never as a sole
+  source.
 - **Modes are not switched in place**: dev↔prod requires `factoryReset` (which
   destroys the key) then `init`. This is the one-way production property.
 - **prod init generates the key** (it has the PIN); `generateKey` in dev creates
@@ -126,8 +135,8 @@ Error object: `{"code":"ERR_*","message":"…","remainingAttempts":N,"backoffMs"
 
 ## Status LED
 
-Boards with an on-board WS2812 (the firmware targets the Adafruit Trinkey
-QT2040: data GPIO27, no power-enable pin) show the device state at a glance:
+The on-board WS2812 (the firmware targets the Waveshare RP2350-One: data
+GPIO16, no power-enable pin) shows the device state at a glance:
 
 | State                | Color                                                                         |
 | -------------------- | ----------------------------------------------------------------------------- |
@@ -135,7 +144,7 @@ QT2040: data GPIO27, no power-enable pin) show the device state at a glance:
 | DevReady / ProdReady | green                                                                         |
 | ProdLocked           | amber                                                                         |
 | LockedOut            | red                                                                           |
-| processing a request | white (held for the duration — a slow Argon2id unlock shows white for ~1.4 s) |
+| processing a request | white (held for the duration — a slow Argon2id unlock visibly holds white for ~1 s) |
 
 ## State machine
 

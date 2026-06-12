@@ -1,4 +1,4 @@
-// Command usbhsm is the host-side companion to the RP2040 usbhsm device: a
+// Command usbhsm is the host-side companion to the RP2350 usbhsm device: a
 // bridge daemon that exposes the device over VSOCK/TCP/Unix for cerberus
 // ssh-cert-api, plus a provisioning/management CLI. See `usbhsm help`.
 package main

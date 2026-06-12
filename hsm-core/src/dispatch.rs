@@ -136,7 +136,12 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     }
 
     /// Report the firmware's security posture (surfaced in `status`).
-    pub fn set_security_flags(&mut self, glitch_armed: bool, secure_boot: bool, glitch_reset: bool) {
+    pub fn set_security_flags(
+        &mut self,
+        glitch_armed: bool,
+        secure_boot: bool,
+        glitch_reset: bool,
+    ) {
         self.glitch_armed = glitch_armed;
         self.secure_boot = secure_boot;
         self.glitch_reset = glitch_reset;
@@ -306,10 +311,10 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             Err(msg) => return Response::error(msg),
         };
         // Signing needs a *seeded* CSPRNG, not fresh hardware entropy: the
-        // ChaCha20 DRBG (seeded at boot/keygen with health-checked ROSC entropy)
+        // ChaCha20 DRBG (seeded at boot/keygen with health-checked TRNG output)
         // produces unique nonces/serials without reseeding. Reseeding per
         // signature would be slow and would make every signature depend on a
-        // fresh ROSC health check. Only seed here if boot seeding never
+        // fresh TRNG health check. Only seed here if boot seeding never
         // succeeded.
         if self.ensure_seeded().is_err() {
             return Response::error("internal error: entropy unavailable");
@@ -778,7 +783,8 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
         } else {
             "fail"
         };
-        let ok = ed == "pass" && sha == "pass" && aead == "pass" && flash == "pass" && otp == "pass";
+        let ok =
+            ed == "pass" && sha == "pass" && aead == "pass" && flash == "pass" && otp == "pass";
         HsmResponse::with(|r| {
             r.self_test = Some(SelfTestResp {
                 ok,
@@ -1258,7 +1264,10 @@ mod tests {
         );
         let r = call(&mut h, r#"{"hsm":{"init":{"mode":"dev"}}}"#);
         assert_eq!(r["hsm"]["error"]["code"], "ERR_INTERNAL");
-        let r = call(&mut h, r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2"}}}"#);
+        let r = call(
+            &mut h,
+            r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2"}}}"#,
+        );
         assert_eq!(r["hsm"]["error"]["code"], "ERR_INTERNAL");
         let s = call(&mut h, r#"{"hsm":{"status":{}}}"#);
         assert_eq!(s["hsm"]["status"]["state"], "uninitialized");

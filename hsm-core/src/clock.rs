@@ -1,6 +1,6 @@
 //! Wall-clock time derived from the monotonic timer plus a host-supplied epoch.
 //!
-//! The RP2040 has no battery-backed RTC and the signing protocol carries no
+//! The device has no battery-backed RTC and the signing protocol carries no
 //! timestamp, so the bridge pushes the current Unix time via `hsm.setTime`. The
 //! device tracks `now = epoch_unix + (monotonic_now - monotonic_at_set)`. Until
 //! a time has been set, [`Clock::now_unix`] returns `None` and signing fails
