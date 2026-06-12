@@ -1,0 +1,15 @@
+[package]
+name = "hsm-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Host simulator: runs hsm-core against an in-memory HAL over stdin/stdout newline JSON."
+
+[dependencies]
+hsm-core = { path = "../hsm-core", features = ["std"] }
+
+[[bin]]
+name = "hsm-sim"
+path = "src/main.rs"
