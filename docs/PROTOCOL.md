@@ -159,11 +159,12 @@ affect a correctly-formed signing request:
    `invalid request:` / duration / `RSA key too small` messages **are**
    byte-identical.
 3. **VSOCK CID on non-Nitro hosts**: `ssh-cert-api` dials VSOCK CID 16. A plain
-   Linux host cannot bind a vsock listener as CID 16 (loopback is CID 1). To run
-   the bridge as a drop-in, choose one of:
-   - run the bridge on TCP/Unix and point `ssh-cert-api` at it (a one-line
-     constant/env change on the api side), or
-   - run the bridge inside a VM whose guest CID is set to 16, or
-   - `socat` a vsock CID-16 listener to the bridge's TCP/Unix socket.
+   Linux host cannot bind a vsock listener as CID 16 (loopback is CID 1). The
+   drop-in path is the `CERBERUS_SIGNER_ENDPOINT` override (implemented on the
+   cerberus `usbhsm-signer-endpoint` branch): run the bridge on TCP/Unix and set
+   `CERBERUS_SIGNER_ENDPOINT=tcp://127.0.0.1:5000`. Unset, the API keeps dialing
+   VSOCK CID 16 unchanged. Alternatives that need no api change: run the bridge
+   in a VM whose CID is 16, or `socat` a vsock CID-16 listener to the bridge.
+   See `docs/PROVISIONING.md`.
 4. **USB VID/PID**: interim `1209:000A` (pid.codes community VID) with product
    string `usbhsm`; apply for a permanent pid.codes PID before distribution.

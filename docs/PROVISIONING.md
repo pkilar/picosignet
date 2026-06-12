@@ -75,13 +75,31 @@ usbhsm bridge --listen vsock:5000
 ```
 
 `ssh-cert-api` dials VSOCK **CID 16, port 5000**. On a plain Linux host you cannot
-bind a vsock listener as CID 16. Options for a true drop-in:
+bind a vsock listener as CID 16 (loopback is CID 1), so a true drop-in points the
+API at the bridge instead. In order of preference:
 
-- Point `ssh-cert-api` at the bridge's TCP/Unix socket (a one-line change to its
-  `enclave.Call` dial target / a CID-or-address env override).
-- Run the bridge inside a VM whose guest CID is set to 16.
+- **Endpoint override (recommended).** ssh-cert-api reads `CERBERUS_SIGNER_ENDPOINT`
+  (implemented on the cerberus `usbhsm-signer-endpoint` branch — `enclave/endpoint.go`):
+
+  ```sh
+  usbhsm bridge --listen tcp:127.0.0.1:5000 &
+  CERBERUS_SIGNER_ENDPOINT=tcp://127.0.0.1:5000 ssh-cert-api ...
+  # or over a unix socket:
+  usbhsm bridge --listen unix:/run/usbhsm.sock &
+  CERBERUS_SIGNER_ENDPOINT=unix:///run/usbhsm.sock ssh-cert-api ...
+  ```
+
+  Unset, ssh-cert-api behaves exactly as before (VSOCK CID 16) — the override is
+  opt-in and transport-transparent (same framing/deadlines).
+
+  Note: on a non-Nitro host, ssh-cert-api's startup `LoadKeySigner` also fetches
+  AWS credentials from IMDS and starts a KMS VSOCK proxy. The usbhsm device
+  ignores the credentials, but those startup steps assume an EC2/Nitro
+  environment; running fully off-Nitro may need them stubbed/skipped separately.
+
+- Run the bridge inside a VM whose guest CID is set to 16 (no api change).
 - `socat VSOCK-LISTEN:5000,fork TCP:127.0.0.1:5000` alongside `usbhsm bridge
-  --listen tcp:127.0.0.1:5000`.
+  --listen tcp:127.0.0.1:5000` (no api change).
 
 Only enable `--allow-remote-mgmt` if you deliberately want provisioning over the
 network; by default, `init`/`unlock`/`generateKey`/etc. are local-CLI only.
