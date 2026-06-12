@@ -31,6 +31,8 @@ embassy-time = "0.4"
 embassy-sync = "0.6"
 embassy-futures = "0.1"
 static_cell = "2"
+# WS2812 status LED via embassy-rp's PIO driver (same smart-leds version).
+smart-leds = "0.4"
 # thumbv6m has no atomic CAS; portable-atomic provides it via critical-section.
 portable-atomic = { version = "1", features = ["critical-section"] }
 

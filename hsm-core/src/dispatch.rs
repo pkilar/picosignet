@@ -31,15 +31,15 @@ use crate::FW_VERSION;
 
 /// Default Argon2id work factors for production init. `m_cost` is in KiB; 64 KiB
 /// fits the RP2040's RAM alongside the JSON buffer. `t_cost` is tuned on the
-/// RP2040: measured ~36 ms per iteration, so t=16 ≈ 580 ms of Argon2 compute
-/// (≈830 ms end-to-end unlock incl. serial round-trip) — a ~5x increase in the
-/// per-guess cost of an offline brute-force against a flash dump versus t=3,
-/// while staying well within the host's per-request timeout. Raise t_cost
-/// further (or m_cost, RAM permitting) for more hardening. The value is
-/// persisted, so a device's cost is fixed at init time.
+/// RP2040: measured ~36 ms per iteration, so t=32 ≈ 1.15 s of Argon2 compute
+/// (≈1.4 s end-to-end unlock incl. serial round-trip) — maximizing the
+/// per-guess cost of an offline brute-force against a flash dump while staying
+/// well within the host's per-request timeout. Raise t_cost further (or m_cost,
+/// RAM permitting) for more hardening. The value is persisted, so a device's
+/// cost is fixed at init time.
 const DEFAULT_ARGON: Argon2Params = Argon2Params {
     m_cost: 64,
-    t_cost: 16,
+    t_cost: 32,
     parallelism: 1,
 };
 
@@ -84,6 +84,9 @@ pub struct Hsm<E: EntropySource, M: Monotonic, F: FlashStore> {
     wrap_kek: Option<Zeroizing<[u8; 32]>>,
     /// Firmware-reported free heap (0 when unknown, e.g. in the simulator).
     heap_free: u64,
+    /// Set by `rebootBootloader`; the firmware reboots into BOOTSEL after
+    /// flushing the response. Ignored by the simulator.
+    reboot_requested: bool,
 }
 
 impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
@@ -105,9 +108,16 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             ca_pubkey: None,
             wrap_kek: None,
             heap_free: 0,
+            reboot_requested: false,
         };
         hsm.load_from_flash();
         hsm
+    }
+
+    /// Consume a pending reboot-to-bootloader request (firmware calls this after
+    /// sending each response; returns true exactly once per request).
+    pub fn take_reboot_requested(&mut self) -> bool {
+        core::mem::replace(&mut self.reboot_requested, false)
     }
 
     /// Update the firmware's free-heap figure (surfaced in metrics/status).
@@ -327,6 +337,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             h.add_entropy.is_some(),
             h.self_test.is_some(),
             h.factory_reset.is_some(),
+            h.reboot_bootloader.is_some(),
         ]
         .iter()
         .filter(|b| **b)
@@ -357,9 +368,20 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             self.hsm_self_test()
         } else if let Some(r) = h.factory_reset {
             self.hsm_factory_reset(r)
+        } else if h.reboot_bootloader.is_some() {
+            self.hsm_reboot_bootloader()
         } else {
             HsmResponse::err(ERR_BAD_REQUEST, "exactly one hsm command expected")
         }
+    }
+
+    /// Request a reboot into the USB mass-storage bootloader after the response
+    /// is sent. The actual reset is hardware-specific, so the core only sets a
+    /// flag the firmware consumes via [`Self::take_reboot_requested`]; the
+    /// simulator simply ignores it.
+    fn hsm_reboot_bootloader(&mut self) -> HsmResponse {
+        self.reboot_requested = true;
+        HsmResponse::with(|r| r.reboot_bootloader = Some(OkResp { ok: true }))
     }
 
     fn hsm_init(&mut self, req: InitReq) -> HsmResponse {

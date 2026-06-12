@@ -178,6 +178,8 @@ pub struct HsmRequest {
     pub self_test: Option<EmptyReq>,
     #[serde(rename = "factoryReset", default)]
     pub factory_reset: Option<FactoryResetReq>,
+    #[serde(rename = "rebootBootloader", default)]
+    pub reboot_bootloader: Option<EmptyReq>,
 }
 
 /// An empty-object command (`getPublicKey`, `lock`, `status`, `selfTest`).
@@ -263,6 +265,8 @@ pub struct HsmResponse {
     pub self_test: Option<SelfTestResp>,
     #[serde(rename = "factoryReset", skip_serializing_if = "Option::is_none")]
     pub factory_reset: Option<OkResp>,
+    #[serde(rename = "rebootBootloader", skip_serializing_if = "Option::is_none")]
+    pub reboot_bootloader: Option<OkResp>,
 }
 
 impl HsmResponse {

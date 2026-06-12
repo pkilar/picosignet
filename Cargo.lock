@@ -918,7 +918,7 @@ dependencies = [
 
 [[package]]
 name = "hsm-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "hsm-fw"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
@@ -950,12 +950,13 @@ dependencies = [
  "hsm-core",
  "panic-halt",
  "portable-atomic",
+ "smart-leds",
  "static_cell",
 ]
 
 [[package]]
 name = "hsm-sim"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "hsm-core",
 ]

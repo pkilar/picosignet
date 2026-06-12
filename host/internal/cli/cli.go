@@ -60,6 +60,8 @@ func Run(args []string) int {
 		err = cmdSelfTest(rest)
 	case "add-entropy":
 		err = cmdAddEntropy(rest)
+	case "reboot-bootloader":
+		err = cmdRebootBootloader(rest)
 	case "-h", "--help", "help":
 		usage()
 		return 0
@@ -92,6 +94,7 @@ usage: usbhsm <command> [flags]
   factory-reset  erase all keys and config (destructive)
   self-test      run on-device self-tests and an end-to-end signing check
   add-entropy    mix host-supplied entropy into the device pool
+  reboot-bootloader  reset the device into the USB bootloader (for reflashing)
 
 Common flags: --port <path> (default: auto-discover), --timeout <dur>
 `)
@@ -427,6 +430,25 @@ func cmdFactoryReset(args []string) error {
 		return err
 	}
 	fmt.Println("device erased")
+	return nil
+}
+
+func cmdRebootBootloader(args []string) error {
+	fs := flag.NewFlagSet("reboot-bootloader", flag.ContinueOnError)
+	c := bindCommon(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	conn, err := openDevice(c)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	// The device acks, then resets into BOOTSEL ~80ms later and disconnects.
+	if _, err := sendHsm(conn, &hsmproto.Request{RebootBootloader: &hsmproto.Empty{}}, c.timeout); err != nil {
+		return err
+	}
+	fmt.Println("rebooting into BOOTSEL; the device will appear as the RPI-RP2 drive")
 	return nil
 }
 

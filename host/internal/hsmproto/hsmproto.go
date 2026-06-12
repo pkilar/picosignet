@@ -17,17 +17,18 @@ type Envelope struct {
 
 // Request carries exactly one management command.
 type Request struct {
-	Init         *InitReq      `json:"init,omitempty"`
-	GenerateKey  *GenerateKey  `json:"generateKey,omitempty"`
-	GetPublicKey *Empty        `json:"getPublicKey,omitempty"`
-	Unlock       *PinReq       `json:"unlock,omitempty"`
-	Lock         *Empty        `json:"lock,omitempty"`
-	SetTime      *SetTimeReq   `json:"setTime,omitempty"`
-	Status       *Empty        `json:"status,omitempty"`
-	ChangePin    *ChangePinReq `json:"changePin,omitempty"`
-	AddEntropy   *AddEntropy   `json:"addEntropy,omitempty"`
-	SelfTest     *Empty        `json:"selfTest,omitempty"`
-	FactoryReset *Confirm      `json:"factoryReset,omitempty"`
+	Init             *InitReq      `json:"init,omitempty"`
+	GenerateKey      *GenerateKey  `json:"generateKey,omitempty"`
+	GetPublicKey     *Empty        `json:"getPublicKey,omitempty"`
+	Unlock           *PinReq       `json:"unlock,omitempty"`
+	Lock             *Empty        `json:"lock,omitempty"`
+	SetTime          *SetTimeReq   `json:"setTime,omitempty"`
+	Status           *Empty        `json:"status,omitempty"`
+	ChangePin        *ChangePinReq `json:"changePin,omitempty"`
+	AddEntropy       *AddEntropy   `json:"addEntropy,omitempty"`
+	SelfTest         *Empty        `json:"selfTest,omitempty"`
+	FactoryReset     *Confirm      `json:"factoryReset,omitempty"`
+	RebootBootloader *Empty        `json:"rebootBootloader,omitempty"`
 }
 
 // Empty is a command with no arguments.
@@ -76,18 +77,19 @@ type Response struct {
 
 // ResponseBody holds the per-command response payloads.
 type ResponseBody struct {
-	Error        *Error         `json:"error,omitempty"`
-	Init         *InitResp      `json:"init,omitempty"`
-	GenerateKey  *PublicKeyResp `json:"generateKey,omitempty"`
-	GetPublicKey *PublicKeyResp `json:"getPublicKey,omitempty"`
-	Unlock       *OkResp        `json:"unlock,omitempty"`
-	Lock         *OkResp        `json:"lock,omitempty"`
-	SetTime      *SetTimeResp   `json:"setTime,omitempty"`
-	Status       *Status        `json:"status,omitempty"`
-	ChangePin    *OkResp        `json:"changePin,omitempty"`
-	AddEntropy   *OkResp        `json:"addEntropy,omitempty"`
-	SelfTest     *SelfTestResp  `json:"selfTest,omitempty"`
-	FactoryReset *OkResp        `json:"factoryReset,omitempty"`
+	Error            *Error         `json:"error,omitempty"`
+	Init             *InitResp      `json:"init,omitempty"`
+	GenerateKey      *PublicKeyResp `json:"generateKey,omitempty"`
+	GetPublicKey     *PublicKeyResp `json:"getPublicKey,omitempty"`
+	Unlock           *OkResp        `json:"unlock,omitempty"`
+	Lock             *OkResp        `json:"lock,omitempty"`
+	SetTime          *SetTimeResp   `json:"setTime,omitempty"`
+	Status           *Status        `json:"status,omitempty"`
+	ChangePin        *OkResp        `json:"changePin,omitempty"`
+	AddEntropy       *OkResp        `json:"addEntropy,omitempty"`
+	SelfTest         *SelfTestResp  `json:"selfTest,omitempty"`
+	FactoryReset     *OkResp        `json:"factoryReset,omitempty"`
+	RebootBootloader *OkResp        `json:"rebootBootloader,omitempty"`
 }
 
 type Error struct {

@@ -10,6 +10,7 @@ extern crate alloc;
 
 mod entropy_hal;
 mod flash_hal;
+mod led;
 mod time_hal;
 mod usb;
 

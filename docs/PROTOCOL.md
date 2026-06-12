@@ -95,6 +95,7 @@ Error object: `{"code":"ERR_*","message":"…","remainingAttempts":N,"backoffMs"
 | addEntropy | `{"hsm":{"addEntropy":{"hex":"…"}}}` (≤1024 B) | `{"hsm":{"addEntropy":{"ok":true}}}` |
 | selfTest | `{"hsm":{"selfTest":{}}}` | per-test pass/fail (below) |
 | factoryReset | `{"hsm":{"factoryReset":{"confirm":"ERASE"}}}` | `{"hsm":{"factoryReset":{"ok":true}}}` |
+| rebootBootloader | `{"hsm":{"rebootBootloader":{}}}` | `{"hsm":{"rebootBootloader":{"ok":true}}}`, then the device resets into the USB bootloader (BOOTSEL) ~80 ms later for reflashing |
 
 `status` payload: `state` (`uninitialized`/`devReady`/`prodLocked`/`prodReady`/
 `lockedOut`), `mode`, `keyPresent`, `unlocked`, `clockSet`, `unixSeconds`,
@@ -122,6 +123,19 @@ Error object: `{"code":"ERR_*","message":"…","remainingAttempts":N,"backoffMs"
 `ERR_KEY_EXISTS`, `ERR_LOCKED`, `ERR_BAD_PIN`, `ERR_LOCKED_OUT`,
 `ERR_CLOCK_UNSET`, `ERR_BAD_MODE`, `ERR_ENTROPY`, `ERR_FLASH`, `ERR_OVERSIZE`,
 `ERR_BUSY`, `ERR_INTERNAL`.
+
+## Status LED
+
+Boards with an on-board WS2812 (the firmware targets the Adafruit Trinkey
+QT2040: data GPIO27, no power-enable pin) show the device state at a glance:
+
+| State | Color |
+|-------|-------|
+| Uninitialized | blue |
+| DevReady / ProdReady | green |
+| ProdLocked | amber |
+| LockedOut | red |
+| processing a request | white (held for the duration — a slow Argon2id unlock shows white for ~1.4 s) |
 
 ## State machine
 
