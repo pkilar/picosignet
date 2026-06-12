@@ -30,12 +30,16 @@ use crate::wrap::{dev_kek, pin_kek, unwrap_seed, wrap_seed};
 use crate::FW_VERSION;
 
 /// Default Argon2id work factors for production init. `m_cost` is in KiB; 64 KiB
-/// fits the RP2040's RAM alongside the JSON buffer. `t_cost` is tuned on
-/// hardware (M4) for a ~0.5–2 s unlock; the value is persisted so a device's
-/// cost is fixed at init time.
+/// fits the RP2040's RAM alongside the JSON buffer. `t_cost` is tuned on the
+/// RP2040: measured ~36 ms per iteration, so t=16 ≈ 580 ms of Argon2 compute
+/// (≈830 ms end-to-end unlock incl. serial round-trip) — a ~5x increase in the
+/// per-guess cost of an offline brute-force against a flash dump versus t=3,
+/// while staying well within the host's per-request timeout. Raise t_cost
+/// further (or m_cost, RAM permitting) for more hardening. The value is
+/// persisted, so a device's cost is fixed at init time.
 const DEFAULT_ARGON: Argon2Params = Argon2Params {
     m_cost: 64,
-    t_cost: 3,
+    t_cost: 16,
     parallelism: 1,
 };
 
