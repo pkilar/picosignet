@@ -1,15 +1,15 @@
-# usbhsm — RP2040 USB HSM for SSH certificate signing.
+# usbhsm — RP2350 USB HSM for SSH certificate signing.
 #
 # Three crates:
 #   hsm-core  no_std+alloc library holding ALL protocol/crypto/state logic,
 #             host-testable through HAL traits.
 #   hsm-sim   std binary wiring hsm-core to mock HAL on stdin/stdout — used by
 #             the differential test suite and local development.
-#   hsm-fw    thin Embassy RP2040 firmware (built for thumbv6m-none-eabi).
+#   hsm-fw    thin Embassy RP2350 firmware (built for thumbv8m.main-none-eabihf).
 #
 # hsm-fw is excluded from default-members so `cargo test` / `cargo build` at the
 # workspace root operate on the host crates only. Build firmware explicitly:
-#   cargo build -p hsm-fw --target thumbv6m-none-eabi --release
+#   cargo build -p hsm-fw --target thumbv8m.main-none-eabihf --release
 [workspace]
 resolver = "2"
 members = ["hsm-core", "hsm-sim", "hsm-fw"]
@@ -38,7 +38,7 @@ zeroize = { version = "1", default-features = false, features = ["derive"] }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 crc = "3"
 
-# Optimize even the dev firmware: the M0+ targets are flash-constrained and the
+# Optimize even the dev firmware: embedded targets are flash-constrained and the
 # crypto wants release-grade codegen. Host crates keep the default dev profile.
 [profile.release]
 opt-level = "z"

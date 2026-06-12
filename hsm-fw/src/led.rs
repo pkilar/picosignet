@@ -1,6 +1,6 @@
 //! WS2812 (NeoPixel) status LED.
 //!
-//! Wiring is for the Adafruit Trinkey QT2040: a single WS2812 on GPIO27, powered
+//! Wiring is for the Waveshare RP2350-One: a single WS2812 on GPIO16, powered
 //! directly (no enable pin). The data line is driven by PIO0/SM0 via embassy-rp's
 //! WS2812 program (DMA-backed). The colors map the device state machine so the
 //! key is glanceable without a host:

@@ -1,11 +1,11 @@
-# Firmware target settings. These apply ONLY when building for the Cortex-M0+
-# (`--target thumbv6m-none-eabi`); host builds of hsm-core/hsm-sim are
+# Firmware target settings. These apply ONLY when building for the Cortex-M33
+# (`--target thumbv8m.main-none-eabihf`); host builds of hsm-core/hsm-sim are
 # unaffected. We deliberately do NOT set `build.target`, so `cargo test` at the
 # root still runs on the host.
-[target.thumbv6m-none-eabi]
-# Flash an attached probe with `cargo run -p hsm-fw --target thumbv6m-none-eabi`.
-# Falls back to elf2uf2-rs for BOOTSEL/UF2 flashing if no probe is present.
-runner = "probe-rs run --chip RP2040"
+[target.'thumbv8m.main-none-eabihf']
+# Flash an attached probe with `cargo run -p hsm-fw --target thumbv8m.main-none-eabihf`.
+# BOOTSEL/UF2 flashing goes through `make uf2` + picotool instead.
+runner = "probe-rs run --chip RP235x"
 rustflags = [
   # cortex-m-rt's linker script; hsm-fw/build.rs adds memory.x to the search path.
   "-C", "link-arg=-Tlink.x",

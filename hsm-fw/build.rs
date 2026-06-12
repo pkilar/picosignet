@@ -1,4 +1,4 @@
-//! Put `memory.x` (the RP2040 flash/RAM layout consumed by cortex-m-rt's
+//! Put `memory.x` (the RP2350 flash/RAM layout consumed by cortex-m-rt's
 //! `link.x`) on the linker search path, and rebuild if it changes.
 
 use std::env;

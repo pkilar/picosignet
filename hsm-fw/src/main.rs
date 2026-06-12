@@ -1,4 +1,4 @@
-//! usbhsm firmware entry point (RP2040).
+//! usbhsm firmware entry point (RP2350).
 //!
 //! Initializes the heap and Embassy, then runs the USB CDC-ACM transport that
 //! pumps newline-delimited JSON to `hsm-core`'s dispatcher. The HAL trait impls
@@ -20,15 +20,22 @@ use embassy_executor::Spawner;
 use embedded_alloc::LlffHeap as Heap;
 use panic_halt as _;
 
-/// Global heap backing `alloc` in `hsm-core`. 128 KiB leaves headroom on the
-/// RP2040's 264 KiB SRAM for stacks, USB buffers, and the Argon2 working set.
+/// Global heap backing `alloc` in `hsm-core`. 384 KiB of the RP2350's 512 KiB
+/// main SRAM: the Argon2id working set (m_cost = 256 KiB) lives here, with
+/// headroom for the protocol buffers; the remaining 128 KiB covers stacks,
+/// statics, and USB buffers.
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 
-const HEAP_SIZE: usize = 128 * 1024;
+const HEAP_SIZE: usize = 384 * 1024;
 
-// The second-stage bootloader (`.boot2`) is provided by embassy-rp, which
-// embeds the W25Q080 loader by default.
+/// RP2350 boot block: the bootrom scans the first 4 KiB of flash for this
+/// IMAGE_DEF (placed by memory.x right after the vector table) to identify a
+/// bootable Arm Secure executable. `picotool seal --sign` extends the block
+/// with a signature for secure-boot provisioned devices.
+#[link_section = ".start_block"]
+#[used]
+pub static IMAGE_DEF: embassy_rp::block::ImageDef = embassy_rp::block::ImageDef::secure_exe();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {

@@ -1,6 +1,6 @@
-//! `FlashStore` over the RP2040's QSPI flash (Embassy blocking driver).
+//! `FlashStore` over the RP2350's QSPI flash (Embassy blocking driver).
 //!
-//! The five HSM regions map to fixed offsets in the last sectors of the 2 MiB
+//! The five HSM regions map to fixed offsets in the last sectors of the 4 MiB
 //! flash, kept out of the firmware's FLASH region by `memory.x`. Blocking flash
 //! ops run the bootrom routines from RAM with interrupts masked; the device
 //! processes one request at a time, so a multi-hundred-millisecond erase never
@@ -10,16 +10,16 @@ use embassy_rp::flash::{Blocking, Flash};
 use embassy_rp::peripherals::FLASH;
 use hsm_core::hal::{FlashStore, HalError, Region, SECTOR_LEN};
 
-/// Total flash size on a stock Pico (2 MiB).
-const FLASH_SIZE: usize = 2 * 1024 * 1024;
+/// Total flash size on the Waveshare RP2350-One (4 MiB).
+const FLASH_SIZE: usize = 4 * 1024 * 1024;
 
 // Region base offsets from the start of flash. Must match memory.x and
 // docs/FLASH_LAYOUT.md.
-const CONFIG_A: u32 = 0x1FA000;
-const CONFIG_B: u32 = 0x1FB000;
-const KEY_A: u32 = 0x1FC000;
-const KEY_B: u32 = 0x1FD000;
-const PIN_COUNTER: u32 = 0x1FE000;
+const CONFIG_A: u32 = 0x3FA000;
+const CONFIG_B: u32 = 0x3FB000;
+const KEY_A: u32 = 0x3FC000;
+const KEY_B: u32 = 0x3FD000;
+const PIN_COUNTER: u32 = 0x3FE000;
 const SECTOR: u32 = SECTOR_LEN as u32;
 
 /// Embassy-backed flash store.
@@ -29,13 +29,16 @@ pub struct EmbassyFlash<'d> {
 }
 
 impl<'d> EmbassyFlash<'d> {
-    /// Take the FLASH peripheral, read the chip unique id, and wrap it.
+    /// Take the FLASH peripheral, read the chip id, and wrap it.
     pub fn new(flash: FLASH) -> Self {
-        let mut flash = Flash::<_, Blocking, FLASH_SIZE>::new_blocking(flash);
-        let mut uid = [0u8; 8];
-        // A failure here leaves uid all-zero; the dev-KEK and serial degrade
-        // gracefully rather than panicking at boot.
-        let _ = flash.blocking_unique_id(&mut uid);
+        let flash = Flash::<_, Blocking, FLASH_SIZE>::new_blocking(flash);
+        // RP2350: the device serial comes from the factory-programmed chip id
+        // in OTP (rows 0x000-0x003) — on-die, unlike the RP2040's QSPI-flash
+        // UID. A failure leaves it all-zero; the serial degrades gracefully
+        // rather than panicking at boot.
+        let uid = embassy_rp::otp::get_chipid()
+            .map(u64::to_be_bytes)
+            .unwrap_or([0u8; 8]);
         EmbassyFlash {
             flash,
             unique_id: uid,

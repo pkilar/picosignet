@@ -8,7 +8,6 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::peripherals::{PIO0, USB};
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
-use embassy_rp::rom_data::reset_to_usb_boot;
 use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
 use embassy_rp::Peripherals;
 use embassy_time::Timer;
@@ -65,7 +64,7 @@ pub async fn run(_spawner: Spawner, p: Peripherals) {
     let mut class = CdcAcmClass::new(&mut builder, STATE.init(State::new()), PACKET as u16);
     let mut usb = builder.build();
 
-    // Status LED: WS2812 on GPIO27 (PIO0/SM0, DMA0) — Adafruit Trinkey QT2040.
+    // Status LED: WS2812 on GPIO16 (PIO0/SM0, DMA0) — Waveshare RP2350-One.
     let Pio {
         mut common, sm0, ..
     } = Pio::new(p.PIO0, Irqs);
@@ -74,7 +73,7 @@ pub async fn run(_spawner: Spawner, p: Peripherals) {
         &mut common,
         sm0,
         p.DMA_CH0,
-        p.PIN_27,
+        p.PIN_16,
         &ws_program,
     ));
 
@@ -116,7 +115,9 @@ async fn session<'c, 'f, 'l>(
                     if hsm.take_reboot_requested() {
                         // Let the ack drain to the host, then reset to BOOTSEL.
                         Timer::after_millis(80).await;
-                        reset_to_usb_boot(0, 0);
+                        // RP2350 bootrom reboot (datasheet §5.4.8.24):
+                        // REBOOT_TYPE_BOOTSEL (0x0002) | NO_RETURN_ON_SUCCESS (0x0100).
+                        embassy_rp::rom_data::reboot(0x0102, 100, 0, 0);
                     }
                 }
                 Some(Event::TooLong) => {
