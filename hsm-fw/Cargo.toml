@@ -1,0 +1,37 @@
+[package]
+name = "hsm-fw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Embassy RP2040 firmware: USB CDC-ACM transport wiring hsm-core to real peripherals."
+
+[features]
+# RP2040 is the default and only target wired today. An `rp2350` feature is
+# reserved so the HAL impls can be cfg-swapped to use the hardware TRNG/OTP
+# later without touching hsm-core.
+default = ["rp2040"]
+rp2040 = []
+rp2350 = []
+
+[dependencies]
+hsm-core = { path = "../hsm-core" }
+
+cortex-m = { version = "0.7", features = ["inline-asm"] }
+cortex-m-rt = "0.7"
+embedded-alloc = "0.6"
+
+# Embassy: async executor, RP2040 HAL, USB CDC-ACM device class. embassy-rp
+# embeds the second-stage bootloader (.boot2) itself.
+embassy-executor = { version = "0.7", features = ["arch-cortex-m", "executor-thread"] }
+embassy-rp = { version = "0.3", features = ["rp2040", "time-driver", "critical-section-impl"] }
+embassy-usb = { version = "0.4", default-features = false }
+embassy-time = "0.4"
+embassy-sync = "0.6"
+embassy-futures = "0.1"
+static_cell = "2"
+# thumbv6m has no atomic CAS; portable-atomic provides it via critical-section.
+portable-atomic = { version = "1", features = ["critical-section"] }
+
+panic-halt = "1"
