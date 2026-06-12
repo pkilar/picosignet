@@ -16,7 +16,13 @@ pub struct MockFlash {
     key_b: [u8; SECTOR_LEN],
     pin_counter: [u8; SECTOR_LEN],
     unique_id: [u8; 8],
+    device_secret: Result<[u8; 32], HalError>,
 }
+
+/// Fixed mock OTP device secret (32 bytes). Deterministic so golden and
+/// differential runs stay reproducible; not persisted by `snapshot()` because
+/// on hardware the secret lives in OTP, not flash.
+pub const MOCK_DEVICE_SECRET: [u8; 32] = *b"usbhsm-mock-otp-secret-32bytes!!";
 
 impl Default for MockFlash {
     fn default() -> Self {
@@ -33,12 +39,28 @@ impl MockFlash {
             key_b: [0xFF; SECTOR_LEN],
             pin_counter: [0xFF; SECTOR_LEN],
             unique_id: [0x42; 8],
+            device_secret: Ok(MOCK_DEVICE_SECRET),
         }
     }
 
     pub fn with_unique_id(id: [u8; 8]) -> Self {
         let mut f = Self::new();
         f.unique_id = id;
+        f
+    }
+
+    /// Test helper: a flash whose device secret differs from the default.
+    pub fn with_device_secret(secret: [u8; 32]) -> Self {
+        let mut f = Self::new();
+        f.device_secret = Ok(secret);
+        f
+    }
+
+    /// Test helper: a device whose OTP secret is unprovisioned/unreadable —
+    /// every KEK operation must fail closed.
+    pub fn without_device_secret() -> Self {
+        let mut f = Self::new();
+        f.device_secret = Err(HalError::Secret);
         f
     }
 
@@ -143,6 +165,10 @@ impl FlashStore for MockFlash {
 
     fn unique_id(&self) -> [u8; 8] {
         self.unique_id
+    }
+
+    fn device_secret(&self) -> Result<[u8; 32], HalError> {
+        self.device_secret
     }
 }
 

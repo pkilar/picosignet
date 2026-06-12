@@ -1,7 +1,7 @@
 //! Hardware abstraction layer.
 //!
 //! `hsm-core` is hardware-agnostic: it talks to the world only through these
-//! traits. The firmware implements them over real RP2040 peripherals; the host
+//! traits. The firmware implements them over real RP2350 peripherals; the host
 //! tests and `hsm-sim` implement them in memory. The split is what makes the
 //! security logic testable without a chip.
 
@@ -18,6 +18,8 @@ pub enum HalError {
     Entropy,
     /// A caller passed an out-of-range region/offset (programming error).
     OutOfRange,
+    /// The per-device secret is unprovisioned or unreadable.
+    Secret,
 }
 
 impl fmt::Display for HalError {
@@ -26,14 +28,15 @@ impl fmt::Display for HalError {
             HalError::Flash => f.write_str("flash operation failed"),
             HalError::Entropy => f.write_str("entropy source unavailable"),
             HalError::OutOfRange => f.write_str("flash region/offset out of range"),
+            HalError::Secret => f.write_str("device secret unavailable"),
         }
     }
 }
 
 /// Raw, *unconditioned* entropy. The core's DRBG ([`crate::rng`]) is
 /// responsible for health-testing and conditioning whatever this returns — an
-/// implementation may return biased or low-rate bits (e.g. RP2040 ROSC
-/// sampling) and the core will whiten them. Implementations must never block
+/// implementation may return biased or low-rate bits (e.g. raw ring-oscillator
+/// samples) and the core will whiten them. Implementations must never block
 /// indefinitely; on hardware fault return [`HalError::Entropy`].
 pub trait EntropySource {
     /// Fill `buf` with raw entropy bytes. May be slow (the core only calls
@@ -69,17 +72,18 @@ pub enum Region {
     PinCounter,
 }
 
-/// Block flash access. Every region is exactly [`FlashStore::SECTOR`] bytes and
-/// erases as a unit; programming is page-granular.
+/// Block flash access plus the device's non-volatile identity facts.
+/// Every region is exactly [`FlashStore::SECTOR`] bytes and erases as a unit;
+/// programming is page-granular.
 ///
-/// On RP2040 these operations run the bootrom flash routines from RAM with
+/// On RP2350 these operations run the bootrom flash routines from RAM with
 /// interrupts masked, so a call may stall the USB stack for tens to hundreds of
 /// milliseconds. The core only writes flash during provisioning/unlock, never
 /// concurrently with a signing hot path, so this is acceptable.
 pub trait FlashStore {
-    /// Erase granularity and the size of every [`Region`]. RP2040 = 4096.
+    /// Erase granularity and the size of every [`Region`]. RP2350 = 4096.
     const SECTOR: usize = 4096;
-    /// Program granularity. RP2040 = 256.
+    /// Program granularity. RP2350 = 256.
     const PAGE: usize = 256;
 
     /// Read the entire sector backing `region` into `buf` (must be
@@ -91,10 +95,20 @@ pub trait FlashStore {
     /// `offset` must be page-aligned and within the sector.
     fn program(&mut self, region: Region, offset: usize, page: &[u8]) -> Result<(), HalError>;
 
-    /// The chip's unique 64-bit ID (RP2040 reads it from the QSPI flash). Used
-    /// as personalization for entropy and to derive the dev-mode wrapping key.
-    /// Stable across reboots and unique per device.
+    /// The chip's unique 64-bit ID (RP2350 reads the factory chip id from
+    /// OTP). Used as personalization for entropy and as the device serial.
+    /// Stable across reboots and unique per device. Public — never key
+    /// material.
     fn unique_id(&self) -> [u8; 8];
+
+    /// The 32-byte per-device wrapping secret — on hardware a TRNG-generated
+    /// value locked in on-die OTP (readable only by secure firmware, never by
+    /// the bootloader or picotool); a fixed mock in tests and the simulator.
+    /// Both the dev and prod KEKs are bound to it, so a dump of the external
+    /// QSPI flash alone can never unwrap the CA key. Returns
+    /// [`HalError::Secret`] if unprovisioned/unreadable — callers must fail
+    /// closed.
+    fn device_secret(&self) -> Result<[u8; 32], HalError>;
 }
 
 /// Convenience: the common sector size as a `usize` constant for buffer sizing
@@ -135,5 +149,8 @@ impl<T: FlashStore> FlashStore for &mut T {
     }
     fn unique_id(&self) -> [u8; 8] {
         (**self).unique_id()
+    }
+    fn device_secret(&self) -> Result<[u8; 32], HalError> {
+        (**self).device_secret()
     }
 }

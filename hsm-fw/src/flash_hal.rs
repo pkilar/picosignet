@@ -85,4 +85,9 @@ impl FlashStore for EmbassyFlash<'_> {
     fn unique_id(&self) -> [u8; 8] {
         self.unique_id
     }
+
+    fn device_secret(&self) -> Result<[u8; 32], HalError> {
+        // Fail closed until the OTP secret provisioning lands (next commit).
+        Err(HalError::Secret)
+    }
 }
