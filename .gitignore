@@ -1,0 +1,17 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Firmware artifacts
+*.uf2
+*.bin
+*.hex
+
+# Go
+/host/usbhsm
+/tests/differential/differential.test
+
+# Editor / OS
+.DS_Store
+*.swp

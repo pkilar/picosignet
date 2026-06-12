@@ -1,0 +1,51 @@
+# usbhsm — RP2040 USB HSM for SSH certificate signing.
+#
+# Three crates:
+#   hsm-core  no_std+alloc library holding ALL protocol/crypto/state logic,
+#             host-testable through HAL traits.
+#   hsm-sim   std binary wiring hsm-core to mock HAL on stdin/stdout — used by
+#             the differential test suite and local development.
+#   hsm-fw    thin Embassy RP2040 firmware (built for thumbv6m-none-eabi).
+#
+# hsm-fw is excluded from default-members so `cargo test` / `cargo build` at the
+# workspace root operate on the host crates only. Build firmware explicitly:
+#   cargo build -p hsm-fw --target thumbv6m-none-eabi --release
+[workspace]
+resolver = "2"
+members = ["hsm-core", "hsm-sim", "hsm-fw"]
+default-members = ["hsm-core", "hsm-sim"]
+
+[workspace.package]
+version = "0.1.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Paul Kilar"]
+repository = "https://github.com/pkilar/usbhsm"
+
+# Shared dependency versions. hsm-core pins the no_std+alloc feature sets; the
+# firmware and sim inherit the same hsm-core build.
+[workspace.dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"] }
+sha2 = { version = "0.10", default-features = false }
+hkdf = { version = "0.12", default-features = false }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+rand_core = { version = "0.6", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
+zeroize = { version = "1", default-features = false, features = ["derive"] }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+crc = "3"
+
+# Optimize even the dev firmware: the M0+ targets are flash-constrained and the
+# crypto wants release-grade codegen. Host crates keep the default dev profile.
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+debug = 2          # symbols stay in the ELF; UF2/flash strips them anyway
+overflow-checks = true
+
+[profile.dev]
+opt-level = 1
