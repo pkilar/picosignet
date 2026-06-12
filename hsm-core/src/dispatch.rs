@@ -29,17 +29,18 @@ use crate::validate::validate;
 use crate::wrap::{dev_kek, pin_kek, unwrap_seed, wrap_seed};
 use crate::FW_VERSION;
 
-/// Default Argon2id work factors for production init. `m_cost` is in KiB; 64 KiB
-/// fits the RP2040's RAM alongside the JSON buffer. `t_cost` is tuned on the
-/// RP2040: measured ~36 ms per iteration, so t=32 ≈ 1.15 s of Argon2 compute
-/// (≈1.4 s end-to-end unlock incl. serial round-trip) — maximizing the
-/// per-guess cost of an offline brute-force against a flash dump while staying
-/// well within the host's per-request timeout. Raise t_cost further (or m_cost,
-/// RAM permitting) for more hardening. The value is persisted, so a device's
-/// cost is fixed at init time.
+/// Default Argon2id work factors for production init. `m_cost` is in KiB;
+/// 256 KiB fits the RP2350's 512 KiB SRAM inside the firmware's 384 KiB heap
+/// alongside the JSON buffers — 4x the memory hardness of the old RP2040
+/// build. `t_cost` = 14 targets ≈1 s of Argon2 compute per guess on the
+/// 150 MHz Cortex-M33 (estimate; re-tuned against real unlock timings during
+/// HIL bring-up). The value is persisted, so a device's cost is fixed at init
+/// time. Note the offline story no longer rests on Argon2 alone: the KEK is
+/// also bound to the on-die OTP secret (see `crate::wrap`), so an attacker
+/// with only a flash dump has nothing to brute-force against.
 const DEFAULT_ARGON: Argon2Params = Argon2Params {
-    m_cost: 64,
-    t_cost: 32,
+    m_cost: 256,
+    t_cost: 14,
     parallelism: 1,
 };
 
@@ -172,13 +173,18 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 match c.mode {
                     Mode::Dev => {
                         self.state = DeviceState::DevReady;
-                        let kek = dev_kek(&self.flash.unique_id());
-                        if let Some(kb) = keyblob {
-                            if let Ok(seed) = unwrap_seed(&kek, &kb) {
-                                self.ca = Some(CaKey::from_seed(&seed));
+                        // No OTP secret => no KEK: the device stays DevReady
+                        // for status purposes but cannot load or wrap a key
+                        // (fail closed; status reports otpSecret:false).
+                        if let Ok(secret) = self.flash.device_secret() {
+                            let kek = dev_kek(&secret);
+                            if let Some(kb) = keyblob {
+                                if let Ok(seed) = unwrap_seed(&kek, &kb) {
+                                    self.ca = Some(CaKey::from_seed(&seed));
+                                }
                             }
+                            self.wrap_kek = Some(kek);
                         }
-                        self.wrap_kek = Some(kek);
                     }
                     Mode::Prod => {
                         self.ca = None;
@@ -393,6 +399,10 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
         }
         match req.mode.as_str() {
             "dev" => {
+                let secret = match self.flash.device_secret() {
+                    Ok(s) => s,
+                    Err(_) => return HsmResponse::err(ERR_INTERNAL, "device secret unavailable"),
+                };
                 let cfg = DeviceConfig {
                     mode: Mode::Dev,
                     argon2: DEFAULT_ARGON,
@@ -409,7 +419,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 }
                 self.config = Some(cfg);
                 self.state = DeviceState::DevReady;
-                self.wrap_kek = Some(dev_kek(&self.flash.unique_id()));
+                self.wrap_kek = Some(dev_kek(&secret));
                 HsmResponse::with(|r| {
                     r.init = Some(InitResp {
                         ok: true,
@@ -436,9 +446,13 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 let max_retries = req.max_retries.unwrap_or(10);
                 let wipe = req.wipe_on_lockout.unwrap_or(false);
 
+                let secret = match self.flash.device_secret() {
+                    Ok(s) => s,
+                    Err(_) => return HsmResponse::err(ERR_INTERNAL, "device secret unavailable"),
+                };
                 let (seed, ca) = CaKey::generate(&mut self.drbg);
                 let pubkey = ca.public_bytes();
-                let kek = match pin_kek(pin.as_bytes(), &salt, &DEFAULT_ARGON) {
+                let kek = match pin_kek(pin.as_bytes(), &salt, &DEFAULT_ARGON, &secret) {
                     Ok(k) => k,
                     Err(_) => return HsmResponse::err(ERR_INTERNAL, "key derivation failed"),
                 };
@@ -662,7 +676,11 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
         let mut new_salt = [0u8; 16];
         self.drbg.fill_bytes(&mut new_salt);
         let mut cfg = self.config.expect("prod implies config");
-        let new_kek = match pin_kek(req.new_pin.as_bytes(), &new_salt, &cfg.argon2) {
+        let secret = match self.flash.device_secret() {
+            Ok(s) => s,
+            Err(_) => return HsmResponse::err(ERR_INTERNAL, "device secret unavailable"),
+        };
+        let new_kek = match pin_kek(req.new_pin.as_bytes(), &new_salt, &cfg.argon2, &secret) {
             Ok(k) => k,
             Err(_) => return HsmResponse::err(ERR_INTERNAL, "key derivation failed"),
         };
@@ -777,7 +795,13 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             Ok(a) => a,
             Err(_) => return Err(HsmResponse::err(ERR_FLASH, "counter write failed")),
         };
-        let kek = match pin_kek(pin_str.as_bytes(), &cfg.salt, &cfg.argon2) {
+        let secret = match self.flash.device_secret() {
+            Ok(s) => s,
+            Err(_) => {
+                return Err(HsmResponse::err(ERR_INTERNAL, "device secret unavailable"));
+            }
+        };
+        let kek = match pin_kek(pin_str.as_bytes(), &cfg.salt, &cfg.argon2, &secret) {
             Ok(k) => k,
             Err(_) => return Err(HsmResponse::err(ERR_INTERNAL, "key derivation failed")),
         };
@@ -1194,5 +1218,60 @@ mod tests {
         let r = call(&mut h, r#"{"hsm":{"selfTest":{}}}"#);
         assert_eq!(r["hsm"]["selfTest"]["ok"], true);
         assert_eq!(r["hsm"]["selfTest"]["tests"]["ed25519Kat"], "pass");
+    }
+
+    #[test]
+    fn missing_device_secret_fails_closed() {
+        // A device whose OTP secret is unprovisioned/unreadable must refuse
+        // every KEK operation (init in either mode) with ERR_INTERNAL, while
+        // status stays reachable.
+        let mut h = Hsm::boot(
+            MockEntropy::new(1),
+            MockClock::new(),
+            MockFlash::without_device_secret(),
+        );
+        let r = call(&mut h, r#"{"hsm":{"init":{"mode":"dev"}}}"#);
+        assert_eq!(r["hsm"]["error"]["code"], "ERR_INTERNAL");
+        let r = call(&mut h, r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2"}}}"#);
+        assert_eq!(r["hsm"]["error"]["code"], "ERR_INTERNAL");
+        let s = call(&mut h, r#"{"hsm":{"status":{}}}"#);
+        assert_eq!(s["hsm"]["status"]["state"], "uninitialized");
+    }
+
+    #[test]
+    fn dev_key_does_not_load_without_device_secret() {
+        // Provision normally, then "move" the flash image to a device whose
+        // OTP secret is gone: the key must not load and signing must refuse.
+        let mut flash = MockFlash::new();
+        {
+            let mut h = Hsm::boot(MockEntropy::new(1), MockClock::new(), &mut flash);
+            call(&mut h, r#"{"hsm":{"init":{"mode":"dev"}}}"#);
+            call(&mut h, r#"{"hsm":{"generateKey":{}}}"#);
+        }
+        let snapshot = flash.snapshot();
+        let mut moved = MockFlash::without_device_secret();
+        assert!(moved.restore(&snapshot));
+        let mut h2 = Hsm::boot(MockEntropy::new(2), MockClock::new(), moved);
+        let s = call(&mut h2, r#"{"hsm":{"status":{}}}"#);
+        assert_eq!(s["hsm"]["status"]["keyPresent"], true);
+        assert_eq!(s["hsm"]["status"]["unlocked"], false); // KEK never derived
+    }
+
+    #[test]
+    fn wrong_device_secret_does_not_unwrap_dev_key() {
+        // Same flash image, different chip (different OTP secret): the AEAD
+        // tag must fail and the key must not load.
+        let mut flash = MockFlash::new();
+        {
+            let mut h = Hsm::boot(MockEntropy::new(1), MockClock::new(), &mut flash);
+            call(&mut h, r#"{"hsm":{"init":{"mode":"dev"}}}"#);
+            call(&mut h, r#"{"hsm":{"generateKey":{}}}"#);
+        }
+        let snapshot = flash.snapshot();
+        let mut other_chip = MockFlash::with_device_secret([0xEE; 32]);
+        assert!(other_chip.restore(&snapshot));
+        let mut h2 = Hsm::boot(MockEntropy::new(2), MockClock::new(), other_chip);
+        let s = call(&mut h2, r#"{"hsm":{"status":{}}}"#);
+        assert_eq!(s["hsm"]["status"]["unlocked"], false);
     }
 }

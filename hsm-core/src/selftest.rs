@@ -56,7 +56,7 @@ pub fn sha512_kat() -> bool {
 /// AEAD KAT: a wrap/unwrap roundtrip recovers the seed, and a tampered tag is
 /// rejected.
 pub fn aead_kat() -> bool {
-    let kek = dev_kek(&[0xA5; 8]);
+    let kek = dev_kek(&[0xA5; 32]);
     let seed = [0x33u8; 32];
     let pubkey = [0x44u8; 32];
     let mut blob = wrap_seed(&kek, &seed, &pubkey, WrapType::DevKek, &[0u8; 12]);

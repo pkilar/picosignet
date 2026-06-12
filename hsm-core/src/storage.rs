@@ -233,13 +233,16 @@ impl DeviceConfig {
     }
 }
 
-/// How the CA seed in a [`KeyBlob`] is wrapped.
+/// How the CA seed in a [`KeyBlob`] is wrapped. Discriminants 1/2 were the v1
+/// (RP2040-era) wraps without the OTP device-secret binding; they are
+/// deliberately rejected by [`KeyBlob::from_bytes`] so a v1 blob can never be
+/// presented to a v2 device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WrapType {
-    /// Device-ID-derived KEK (dev mode; obfuscation only).
-    DevKek = 1,
-    /// Argon2id(PIN)-derived KEK (production).
-    PinKek = 2,
+    /// OTP-secret-derived KEK (dev mode).
+    DevKek = 3,
+    /// Argon2id(PIN) + OTP-secret KEK (production).
+    PinKek = 4,
 }
 
 /// The wrapped CA key record (`KEY_A`/`KEY_B` payload). The public key is stored
@@ -269,8 +272,8 @@ impl KeyBlob {
             return None;
         }
         let wrap_type = match b[0] {
-            1 => WrapType::DevKek,
-            2 => WrapType::PinKek,
+            3 => WrapType::DevKek,
+            4 => WrapType::PinKek,
             _ => return None,
         };
         let mut aead_nonce = [0u8; 12];
