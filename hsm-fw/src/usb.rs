@@ -82,9 +82,15 @@ pub async fn run(_spawner: Spawner, p: Peripherals) {
     let usb_fut = usb.run();
 
     let proto_fut = async {
-        let trng = Trng::new(p.TRNG, Irqs, TrngEntropy::config());
-        let flash = EmbassyFlash::new(p.FLASH);
-        let mut hsm = Hsm::boot(TrngEntropy::new(trng), EmbassyClock, flash);
+        let mut entropy = TrngEntropy::new(Trng::new(p.TRNG, Irqs, TrngEntropy::config()));
+        // First boot burns the per-device OTP secret; every boot loads it,
+        // then the runtime SW_LOCK makes its pages unreadable (even to us)
+        // until the next reset. On failure the device still boots — status
+        // stays reachable — but every KEK operation fails closed.
+        let device_secret = crate::otp_secret::load_or_provision(&mut entropy);
+        crate::otp_secret::lock_slots();
+        let flash = EmbassyFlash::new(p.FLASH, device_secret);
+        let mut hsm = Hsm::boot(entropy, EmbassyClock, flash);
         // Fold boot SRAM noise into the DRBG (additive; the TRNG stays the
         // primary, health-checked source).
         hsm.mix_entropy(&boot_noise());

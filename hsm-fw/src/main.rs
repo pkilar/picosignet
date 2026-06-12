@@ -11,6 +11,7 @@ extern crate alloc;
 mod entropy_hal;
 mod flash_hal;
 mod led;
+mod otp_secret;
 mod time_hal;
 mod usb;
 

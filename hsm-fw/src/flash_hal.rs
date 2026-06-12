@@ -26,11 +26,16 @@ const SECTOR: u32 = SECTOR_LEN as u32;
 pub struct EmbassyFlash<'d> {
     flash: Flash<'d, FLASH, Blocking, FLASH_SIZE>,
     unique_id: [u8; 8],
+    /// The OTP wrapping secret, loaded/provisioned at boot by
+    /// `otp_secret::load_or_provision` (the OTP pages are SW_LOCKed by then,
+    /// so this RAM copy is the only live access for the rest of the uptime).
+    device_secret: Result<[u8; 32], HalError>,
 }
 
 impl<'d> EmbassyFlash<'d> {
-    /// Take the FLASH peripheral, read the chip id, and wrap it.
-    pub fn new(flash: FLASH) -> Self {
+    /// Take the FLASH peripheral, read the chip id, and wrap it together with
+    /// the boot-loaded OTP secret.
+    pub fn new(flash: FLASH, device_secret: Result<[u8; 32], HalError>) -> Self {
         let flash = Flash::<_, Blocking, FLASH_SIZE>::new_blocking(flash);
         // RP2350: the device serial comes from the factory-programmed chip id
         // in OTP (rows 0x000-0x003) — on-die, unlike the RP2040's QSPI-flash
@@ -42,6 +47,7 @@ impl<'d> EmbassyFlash<'d> {
         EmbassyFlash {
             flash,
             unique_id: uid,
+            device_secret,
         }
     }
 
@@ -87,7 +93,6 @@ impl FlashStore for EmbassyFlash<'_> {
     }
 
     fn device_secret(&self) -> Result<[u8; 32], HalError> {
-        // Fail closed until the OTP secret provisioning lands (next commit).
-        Err(HalError::Secret)
+        self.device_secret
     }
 }

@@ -9,6 +9,8 @@ description = "Embassy RP2350 firmware: USB CDC-ACM transport wiring hsm-core to
 
 [dependencies]
 hsm-core = { path = "../hsm-core" }
+# RngCore for drawing the OTP secret from hsm-core's health-checked DRBG.
+rand_core.workspace = true
 
 cortex-m = { version = "0.7", features = ["inline-asm"] }
 cortex-m-rt = "0.7"
