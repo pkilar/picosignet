@@ -5,9 +5,10 @@
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
-use embassy_rp::peripherals::{PIO0, USB};
+use embassy_rp::peripherals::{PIO0, TRNG, USB};
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
+use embassy_rp::trng::{InterruptHandler as TrngInterruptHandler, Trng};
 use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
 use embassy_rp::Peripherals;
 use embassy_time::Timer;
@@ -19,7 +20,7 @@ use static_cell::StaticCell;
 use hsm_core::dispatch::Hsm;
 use hsm_core::lineio::{Event, LineAssembler};
 
-use crate::entropy_hal::{boot_noise, RoscEntropy};
+use crate::entropy_hal::{boot_noise, TrngEntropy};
 use crate::flash_hal::EmbassyFlash;
 use crate::led::StatusLed;
 use crate::time_hal::EmbassyClock;
@@ -27,6 +28,7 @@ use crate::time_hal::EmbassyClock;
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => UsbInterruptHandler<USB>;
     PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
+    TRNG_IRQ => TrngInterruptHandler<TRNG>;
 });
 
 const PACKET: usize = 64;
@@ -80,10 +82,11 @@ pub async fn run(_spawner: Spawner, p: Peripherals) {
     let usb_fut = usb.run();
 
     let proto_fut = async {
+        let trng = Trng::new(p.TRNG, Irqs, TrngEntropy::config());
         let flash = EmbassyFlash::new(p.FLASH);
-        let mut hsm = Hsm::boot(RoscEntropy::new(), EmbassyClock, flash);
-        // Fold boot SRAM noise into the DRBG (additive; ROSC stays the primary,
-        // health-checked source).
+        let mut hsm = Hsm::boot(TrngEntropy::new(trng), EmbassyClock, flash);
+        // Fold boot SRAM noise into the DRBG (additive; the TRNG stays the
+        // primary, health-checked source).
         hsm.mix_entropy(&boot_noise());
         led.set_state(hsm.state()).await;
 
@@ -96,9 +99,9 @@ pub async fn run(_spawner: Spawner, p: Peripherals) {
     join(usb_fut, proto_fut).await;
 }
 
-async fn session<'c, 'f, 'l>(
+async fn session<'c, 't, 'f, 'l>(
     class: &mut CdcAcmClass<'c, Driver<'c, USB>>,
-    hsm: &mut Hsm<RoscEntropy, EmbassyClock, EmbassyFlash<'f>>,
+    hsm: &mut Hsm<TrngEntropy<'t>, EmbassyClock, EmbassyFlash<'f>>,
     led: &mut StatusLed<'l>,
 ) -> Result<(), EndpointError> {
     let mut asm = LineAssembler::new();

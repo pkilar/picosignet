@@ -1,9 +1,10 @@
-//! A conditioned DRBG for a chip with no hardware TRNG.
+//! A conditioned DRBG over the raw hardware entropy source.
 //!
-//! Raw entropy from the [`EntropySource`] (RP2040 ROSC sampling, ADC noise,
-//! SRAM startup state) is health-checked, then conditioned through SHA-512 into
-//! a ChaCha20 DRBG. The DRBG is reseeded before key generation and can mix in
-//! host-supplied entropy additively (never as a sole source).
+//! Raw entropy from the [`EntropySource`] (the RP2350 TRNG with its hardware
+//! post-processing bypassed, plus supplementary SRAM startup state) is
+//! health-checked, then conditioned through SHA-512 into a ChaCha20 DRBG. The
+//! DRBG is reseeded before key generation and can mix in host-supplied entropy
+//! additively (never as a sole source).
 //!
 //! The health checks are a pragmatic subset of NIST SP 800-90B's startup tests
 //! — a repetition-count test (catches a stuck source) and an adaptive-
@@ -26,9 +27,9 @@ const RCT_CUTOFF: usize = 24;
 /// Adaptive-proportion cutoff: any byte value exceeding this count fails.
 const APT_MAX: usize = SEED_SAMPLE / 4;
 /// How many fresh samples to draw before declaring the source unhealthy. A
-/// physical source (RP2040 ROSC) can produce an occasional sample that trips the
-/// startup checks; retrying absorbs that while a genuinely dead/stuck source
-/// still fails every attempt.
+/// physical source (a free-running ring oscillator) can produce an occasional
+/// sample that trips the startup checks; retrying absorbs that while a
+/// genuinely dead/stuck source still fails every attempt.
 const MAX_HEALTH_RETRIES: u8 = 16;
 
 /// A health-checked, SHA-512-conditioned ChaCha20 DRBG.
