@@ -71,17 +71,28 @@ enum SlotState {
 /// unusable-KEK state rather than continue with a degenerate secret.
 pub fn load_or_provision<E: EntropySource>(entropy: &mut E) -> Result<[u8; 32], HalError> {
     for &page in &SLOT_PAGES {
-        match try_load(page) {
-            SlotState::Valid(secret) => return Ok(secret),
+        let secret = match try_load(page) {
+            SlotState::Valid(secret) => secret,
             SlotState::Blank => match provision(page, entropy) {
-                Ok(secret) => return Ok(secret),
+                Ok(secret) => secret,
                 // Entropy failure is global, not per-slot: don't burn the
                 // fallback page on a sick TRNG.
                 Err(HalError::Entropy) => return Err(HalError::Entropy),
                 Err(_) => continue,
             },
             SlotState::Unusable => continue,
+        };
+        // Defense in depth: once a valid secret exists, hard-lock BOTH pages
+        // (best effort on the inactive one) so nobody can plant a forged
+        // fallback slot via picotool while the device awaits its secure-boot
+        // burn. Provisioning never runs again, so the spare page is dead
+        // weight either way.
+        for &p in &SLOT_PAGES {
+            if p != page {
+                let _ = ensure_hard_lock(p);
+            }
         }
+        return Ok(secret);
     }
     Err(HalError::Secret)
 }
