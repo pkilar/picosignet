@@ -7,6 +7,12 @@
 FW_TARGET := thumbv8m.main-none-eabihf
 FW_BIN    := target/$(FW_TARGET)/release/hsm-fw
 
+# Boot-signing material for production secure boot (gitignored; see
+# docs/PROVISIONING.md). Losing the key bricks updates on burned devices.
+KEYS_DIR := keys
+BOOT_KEY := $(KEYS_DIR)/usbhsm-boot.pem
+BOOT_OTP := $(KEYS_DIR)/usbhsm-bootkey-otp.json
+
 .PHONY: all
 all: test build-fw go-test
 
@@ -39,6 +45,27 @@ build-fw:             ## cross-build the RP2350 firmware (release)
 .PHONY: uf2
 uf2: build-fw         ## produce an (unsigned) UF2 for BOOTSEL flashing
 	picotool uf2 convert -t elf $(FW_BIN) $(FW_BIN).uf2 --family rp2350-arm-s
+
+.PHONY: keygen
+keygen:               ## one-time secp256k1 boot-signing key (NEVER commit; back up offline)
+	@test ! -f $(BOOT_KEY) || { echo "refusing to overwrite $(BOOT_KEY)"; exit 1; }
+	mkdir -p $(KEYS_DIR)
+	openssl ecparam -name secp256k1 -genkey -noout -out $(BOOT_KEY)
+	chmod 600 $(BOOT_KEY)
+	@echo "Generated $(BOOT_KEY)."
+	@echo "Back it up offline (two copies): after the production OTP burn,"
+	@echo "losing this key permanently bricks firmware updates."
+
+.PHONY: uf2-signed
+uf2-signed: build-fw  ## signed+sealed UF2 + boot-key OTP JSON (production)
+	@test -f $(BOOT_KEY) || { echo "no $(BOOT_KEY); run 'make keygen' first"; exit 1; }
+	picotool seal --sign $(FW_BIN) $(FW_BIN)-signed.uf2 $(BOOT_KEY) $(BOOT_OTP)
+	@echo "Signed UF2: $(FW_BIN)-signed.uf2"
+	@echo "Boot-key OTP JSON: $(BOOT_OTP) (consumed by scripts/provision_production.sh)"
+
+.PHONY: flash-uf2
+flash-uf2: uf2        ## flash over picoboot (device in BOOTSEL)
+	picotool load -u -v -x $(FW_BIN).uf2
 
 .PHONY: flash
 flash: build-fw       ## flash an attached probe via probe-rs

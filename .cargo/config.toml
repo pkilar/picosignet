@@ -1,8 +1,12 @@
-# Firmware target settings. These apply ONLY when building for the Cortex-M33
-# (`--target thumbv8m.main-none-eabihf`); host builds of hsm-core/hsm-sim are
-# unaffected. We deliberately do NOT set `build.target`, so `cargo test` at the
-# root still runs on the host.
-[target.'thumbv8m.main-none-eabihf']
+# Firmware target settings. These apply ONLY when building for the bare-metal
+# Cortex-M33 (`--target thumbv8m.main-none-eabihf`); host builds of
+# hsm-core/hsm-sim are unaffected (the cfg() below never matches the host). We
+# deliberately do NOT set `build.target`, so `cargo test` at the root still
+# runs on the host.
+#
+# NOTE: the cfg() table form is required — a literal `[target.'thumbv8m.…']`
+# key is not matched by cargo for triples containing dots.
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
 # Flash an attached probe with `cargo run -p hsm-fw --target thumbv8m.main-none-eabihf`.
 # BOOTSEL/UF2 flashing goes through `make uf2` + picotool instead.
 runner = "probe-rs run --chip RP235x"
