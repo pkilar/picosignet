@@ -81,21 +81,21 @@ unless `--allow-remote-mgmt` is set.
 Error object: `{"code":"ERR_*","message":"…","remainingAttempts":N,"backoffMs":N}`
 (the last two only on PIN failures).
 
-| Command | Request | Success response |
-|---------|---------|------------------|
-| init (dev) | `{"hsm":{"init":{"mode":"dev"}}}` | `{"hsm":{"init":{"ok":true,"mode":"dev"}}}` |
-| init (prod) | `{"hsm":{"init":{"mode":"prod","pin":"…","maxRetries":10,"wipeOnLockout":false}}}` | `{"hsm":{"init":{"ok":true,"mode":"prod"}}}` |
-| generateKey | `{"hsm":{"generateKey":{"force":false}}}` | `{"hsm":{"generateKey":{"ok":true,"publicKey":"ssh-ed25519 AAAA… usbhsm-ca"}}}` |
-| getPublicKey | `{"hsm":{"getPublicKey":{}}}` | `{"hsm":{"getPublicKey":{"publicKey":"…"}}}` |
-| unlock | `{"hsm":{"unlock":{"pin":"…"}}}` | `{"hsm":{"unlock":{"ok":true}}}` |
-| lock | `{"hsm":{"lock":{}}}` | `{"hsm":{"lock":{"ok":true}}}` |
-| setTime | `{"hsm":{"setTime":{"unixSeconds":N}}}` | `{"hsm":{"setTime":{"ok":true,"uptimeMs":…,"previousSet":bool}}}` |
-| status | `{"hsm":{"status":{}}}` | see below |
-| changePin | `{"hsm":{"changePin":{"currentPin":"…","newPin":"…"}}}` | `{"hsm":{"changePin":{"ok":true}}}` |
-| addEntropy | `{"hsm":{"addEntropy":{"hex":"…"}}}` (≤1024 B) | `{"hsm":{"addEntropy":{"ok":true}}}` |
-| selfTest | `{"hsm":{"selfTest":{}}}` | per-test pass/fail (below) |
-| factoryReset | `{"hsm":{"factoryReset":{"confirm":"ERASE"}}}` | `{"hsm":{"factoryReset":{"ok":true}}}` |
-| rebootBootloader | `{"hsm":{"rebootBootloader":{}}}` | `{"hsm":{"rebootBootloader":{"ok":true}}}`, then the device resets into the USB bootloader (BOOTSEL) ~80 ms later for reflashing |
+| Command          | Request                                                                            | Success response                                                                                                                 |
+| ---------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| init (dev)       | `{"hsm":{"init":{"mode":"dev"}}}`                                                  | `{"hsm":{"init":{"ok":true,"mode":"dev"}}}`                                                                                      |
+| init (prod)      | `{"hsm":{"init":{"mode":"prod","pin":"…","maxRetries":10,"wipeOnLockout":false}}}` | `{"hsm":{"init":{"ok":true,"mode":"prod"}}}`                                                                                     |
+| generateKey      | `{"hsm":{"generateKey":{"force":false}}}`                                          | `{"hsm":{"generateKey":{"ok":true,"publicKey":"ssh-ed25519 AAAA… usbhsm-ca"}}}`                                                  |
+| getPublicKey     | `{"hsm":{"getPublicKey":{}}}`                                                      | `{"hsm":{"getPublicKey":{"publicKey":"…"}}}`                                                                                     |
+| unlock           | `{"hsm":{"unlock":{"pin":"…"}}}`                                                   | `{"hsm":{"unlock":{"ok":true}}}`                                                                                                 |
+| lock             | `{"hsm":{"lock":{}}}`                                                              | `{"hsm":{"lock":{"ok":true}}}`                                                                                                   |
+| setTime          | `{"hsm":{"setTime":{"unixSeconds":N}}}`                                            | `{"hsm":{"setTime":{"ok":true,"uptimeMs":…,"previousSet":bool}}}`                                                                |
+| status           | `{"hsm":{"status":{}}}`                                                            | see below                                                                                                                        |
+| changePin        | `{"hsm":{"changePin":{"currentPin":"…","newPin":"…"}}}`                            | `{"hsm":{"changePin":{"ok":true}}}`                                                                                              |
+| addEntropy       | `{"hsm":{"addEntropy":{"hex":"…"}}}` (≤1024 B)                                     | `{"hsm":{"addEntropy":{"ok":true}}}`                                                                                             |
+| selfTest         | `{"hsm":{"selfTest":{}}}`                                                          | per-test pass/fail (below)                                                                                                       |
+| factoryReset     | `{"hsm":{"factoryReset":{"confirm":"ERASE"}}}`                                     | `{"hsm":{"factoryReset":{"ok":true}}}`                                                                                           |
+| rebootBootloader | `{"hsm":{"rebootBootloader":{}}}`                                                  | `{"hsm":{"rebootBootloader":{"ok":true}}}`, then the device resets into the USB bootloader (BOOTSEL) ~80 ms later for reflashing |
 
 `status` payload: `state` (`uninitialized`/`devReady`/`prodLocked`/`prodReady`/
 `lockedOut`), `mode`, `keyPresent`, `unlocked`, `clockSet`, `unixSeconds`,
@@ -129,12 +129,12 @@ Error object: `{"code":"ERR_*","message":"…","remainingAttempts":N,"backoffMs"
 Boards with an on-board WS2812 (the firmware targets the Adafruit Trinkey
 QT2040: data GPIO27, no power-enable pin) show the device state at a glance:
 
-| State | Color |
-|-------|-------|
-| Uninitialized | blue |
-| DevReady / ProdReady | green |
-| ProdLocked | amber |
-| LockedOut | red |
+| State                | Color                                                                         |
+| -------------------- | ----------------------------------------------------------------------------- |
+| Uninitialized        | blue                                                                          |
+| DevReady / ProdReady | green                                                                         |
+| ProdLocked           | amber                                                                         |
+| LockedOut            | red                                                                           |
 | processing a request | white (held for the duration — a slow Argon2id unlock shows white for ~1.4 s) |
 
 ## State machine
@@ -143,9 +143,9 @@ QT2040: data GPIO27, no power-enable pin) show the device state at a glance:
 Uninitialized ──init(dev)──▶ DevReady ──generateKey──▶ DevReady
      │                                                   ▲ │  lock/USB-reset → DevReady
      └──init(prod,pin)──▶ ProdLocked ──unlock(ok)──▶ ProdReady
-                            │  ▲   └──unlock(bad)──┐      │
-                            │  └──────────────────┘      │ lock / USB reset / suspend
-                            ▼ (retry budget exhausted)   ▼
+                            │  ▲   └──unlock(bad)──┐       │
+                            │  └──────────────────┘        │ lock / USB reset / suspend
+                            ▼ (retry budget exhausted)     ▼
                          LockedOut ◀──────────────── (back to ProdLocked)
                             │
                             └──factoryReset──▶ Uninitialized

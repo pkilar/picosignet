@@ -5,16 +5,16 @@ state. `memory.x` carves them out of the firmware's `FLASH` region so code can
 never grow into them — the linker errors if the binary exceeds the firmware
 region, a hard ceiling protecting the key.
 
-| Region | Offset | Size | Contents |
-|--------|--------|------|----------|
-| BOOT2 | `0x000000` | 256 B | second-stage bootloader (provided by embassy-rp) |
-| Firmware (XIP) | `0x000100` | ~1.99 MiB | code + rodata, ends at `0x1FA000` |
-| CONFIG_A | `0x1FA000` | 4 KiB | device config record |
-| CONFIG_B | `0x1FB000` | 4 KiB | redundant config copy |
-| KEY_A | `0x1FC000` | 4 KiB | wrapped CA key record |
-| KEY_B | `0x1FD000` | 4 KiB | redundant key copy |
-| PIN_COUNTER | `0x1FE000` | 4 KiB | PIN attempt tick log |
-| RESERVED | `0x1FF000` | 4 KiB | future (RP2350 OTP shadow, audit log) |
+| Region         | Offset     | Size      | Contents                                         |
+| -------------- | ---------- | --------- | ------------------------------------------------ |
+| BOOT2          | `0x000000` | 256 B     | second-stage bootloader (provided by embassy-rp) |
+| Firmware (XIP) | `0x000100` | ~1.99 MiB | code + rodata, ends at `0x1FA000`                |
+| CONFIG_A       | `0x1FA000` | 4 KiB     | device config record                             |
+| CONFIG_B       | `0x1FB000` | 4 KiB     | redundant config copy                            |
+| KEY_A          | `0x1FC000` | 4 KiB     | wrapped CA key record                            |
+| KEY_B          | `0x1FD000` | 4 KiB     | redundant key copy                               |
+| PIN_COUNTER    | `0x1FE000` | 4 KiB     | PIN attempt tick log                             |
+| RESERVED       | `0x1FF000` | 4 KiB     | future (RP2350 OTP shadow, audit log)            |
 
 Current firmware footprint is ≈188 KiB of the ~2 MiB firmware region.
 
