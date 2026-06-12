@@ -85,6 +85,12 @@ pub struct Hsm<E: EntropySource, M: Monotonic, F: FlashStore> {
     wrap_kek: Option<Zeroizing<[u8; 32]>>,
     /// Firmware-reported free heap (0 when unknown, e.g. in the simulator).
     heap_free: u64,
+    /// Firmware-reported security posture (all false in the simulator):
+    /// glitch detectors armed, bootrom secure-boot enforcement, and whether
+    /// the last reset was a glitch-detector trigger.
+    glitch_armed: bool,
+    secure_boot: bool,
+    glitch_reset: bool,
     /// Set by `rebootBootloader`; the firmware reboots into BOOTSEL after
     /// flushing the response. Ignored by the simulator.
     reboot_requested: bool,
@@ -109,6 +115,9 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             ca_pubkey: None,
             wrap_kek: None,
             heap_free: 0,
+            glitch_armed: false,
+            secure_boot: false,
+            glitch_reset: false,
             reboot_requested: false,
         };
         hsm.load_from_flash();
@@ -124,6 +133,13 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     /// Update the firmware's free-heap figure (surfaced in metrics/status).
     pub fn set_heap_free(&mut self, bytes: u64) {
         self.heap_free = bytes;
+    }
+
+    /// Report the firmware's security posture (surfaced in `status`).
+    pub fn set_security_flags(&mut self, glitch_armed: bool, secure_boot: bool, glitch_reset: bool) {
+        self.glitch_armed = glitch_armed;
+        self.secure_boot = secure_boot;
+        self.glitch_reset = glitch_reset;
     }
 
     /// Current state (for tests and firmware status LEDs).
@@ -640,6 +656,10 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             fw_version: FW_VERSION.to_string(),
             serial: hex_encode(&self.flash.unique_id()),
             heap_free_bytes: self.heap_free,
+            otp_secret: self.flash.device_secret().is_ok(),
+            glitch_armed: self.glitch_armed,
+            secure_boot: self.secure_boot,
+            glitch_reset: self.glitch_reset,
         };
         HsmResponse::with(|r| r.status = Some(resp))
     }
@@ -753,7 +773,12 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
         };
         let flash_ok = storage::CONFIG.read_latest(&mut self.flash).is_ok();
         let flash = if flash_ok { "pass" } else { "fail" };
-        let ok = ed == "pass" && sha == "pass" && aead == "pass" && flash == "pass";
+        let otp = if self.flash.device_secret().is_ok() {
+            "pass"
+        } else {
+            "fail"
+        };
+        let ok = ed == "pass" && sha == "pass" && aead == "pass" && flash == "pass" && otp == "pass";
         HsmResponse::with(|r| {
             r.self_test = Some(SelfTestResp {
                 ok,
@@ -763,6 +788,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                     aead_kat: aead.to_string(),
                     drbg_health: drbg.to_string(),
                     flash_crc: flash.to_string(),
+                    otp_secret: otp.to_string(),
                 },
             })
         })

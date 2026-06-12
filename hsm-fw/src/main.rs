@@ -12,6 +12,7 @@ mod entropy_hal;
 mod flash_hal;
 mod led;
 mod otp_secret;
+mod security;
 mod time_hal;
 mod usb;
 

@@ -344,6 +344,12 @@ func cmdStatus(args []string) error {
 	}
 	fmt.Printf("firmware:     %s\n", s.FwVersion)
 	fmt.Printf("serial:       %s\n", s.Serial)
+	fmt.Printf("otp secret:   %t\n", s.OtpSecret)
+	fmt.Printf("glitch det:   %t\n", s.GlitchArmed)
+	fmt.Printf("secure boot:  %t\n", s.SecureBoot)
+	if s.GlitchReset {
+		fmt.Printf("WARNING: last reset was a glitch-detector trigger\n")
+	}
 	return nil
 }
 
@@ -494,8 +500,8 @@ func cmdSelfTest(args []string) error {
 		return err
 	}
 	st := body.SelfTest
-	fmt.Printf("device self-test: ok=%t ed25519=%s sha2=%s aead=%s drbg=%s flash=%s\n",
-		st.Ok, st.Tests.Ed25519Kat, st.Tests.Sha2Kat, st.Tests.AeadKat, st.Tests.DrbgHealth, st.Tests.FlashCrc)
+	fmt.Printf("device self-test: ok=%t ed25519=%s sha2=%s aead=%s drbg=%s flash=%s otp=%s\n",
+		st.Ok, st.Tests.Ed25519Kat, st.Tests.Sha2Kat, st.Tests.AeadKat, st.Tests.DrbgHealth, st.Tests.FlashCrc, st.Tests.OtpSecret)
 	if !st.Ok {
 		return errors.New("on-device self-test failed")
 	}

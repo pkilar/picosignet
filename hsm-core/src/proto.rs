@@ -359,6 +359,18 @@ pub struct StatusResp {
     pub serial: String,
     #[serde(rename = "heapFreeBytes")]
     pub heap_free_bytes: u64,
+    /// Per-device OTP wrapping secret present and loaded.
+    #[serde(rename = "otpSecret")]
+    pub otp_secret: bool,
+    /// Voltage-glitch detectors armed (RP2350; false in the simulator).
+    #[serde(rename = "glitchArmed")]
+    pub glitch_armed: bool,
+    /// Bootrom signed-boot enforcement burned in OTP (production devices).
+    #[serde(rename = "secureBoot")]
+    pub secure_boot: bool,
+    /// The last chip reset was a glitch-detector trigger.
+    #[serde(rename = "glitchReset")]
+    pub glitch_reset: bool,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -379,6 +391,8 @@ pub struct SelfTestDetails {
     pub drbg_health: String,
     #[serde(rename = "flashCrc")]
     pub flash_crc: String,
+    #[serde(rename = "otpSecret")]
+    pub otp_secret: String,
 }
 
 #[cfg(test)]

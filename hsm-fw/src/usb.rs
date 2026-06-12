@@ -35,6 +35,10 @@ const PACKET: usize = 64;
 
 /// Build the USB device + status LED and run them with the protocol loop.
 pub async fn run(_spawner: Spawner, p: Peripherals) {
+    // Arm the voltage-glitch detectors before anything touches key material;
+    // the config locks until next reset.
+    let glitch_armed = crate::security::arm_glitch_detectors();
+
     let driver = Driver::new(p.USB, Irqs);
 
     let mut config = Config::new(0x1209, 0x000A);
@@ -91,6 +95,11 @@ pub async fn run(_spawner: Spawner, p: Peripherals) {
         crate::otp_secret::lock_slots();
         let flash = EmbassyFlash::new(p.FLASH, device_secret);
         let mut hsm = Hsm::boot(entropy, EmbassyClock, flash);
+        hsm.set_security_flags(
+            glitch_armed,
+            crate::security::secure_boot_enabled(),
+            crate::security::last_reset_was_glitch(),
+        );
         // Fold boot SRAM noise into the DRBG (additive; the TRNG stays the
         // primary, health-checked source).
         hsm.mix_entropy(&boot_noise());

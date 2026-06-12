@@ -131,6 +131,10 @@ type Status struct {
 	FwVersion      string `json:"fwVersion"`
 	Serial         string `json:"serial"`
 	HeapFreeBytes  uint64 `json:"heapFreeBytes"`
+	OtpSecret      bool   `json:"otpSecret"`
+	GlitchArmed    bool   `json:"glitchArmed"`
+	SecureBoot     bool   `json:"secureBoot"`
+	GlitchReset    bool   `json:"glitchReset"`
 }
 
 type SelfTestResp struct {
@@ -144,6 +148,7 @@ type SelfTestDetails struct {
 	AeadKat    string `json:"aeadKat"`
 	DrbgHealth string `json:"drbgHealth"`
 	FlashCrc   string `json:"flashCrc"`
+	OtpSecret  string `json:"otpSecret"`
 }
 
 // Marshal serializes a management request as a single JSON line.
