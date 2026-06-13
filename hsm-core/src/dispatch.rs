@@ -31,8 +31,8 @@ use crate::FW_VERSION;
 
 /// Default Argon2id work factors for production init. `m_cost` is in KiB;
 /// 256 KiB fits the RP2350's 512 KiB SRAM inside the firmware's 384 KiB heap
-/// alongside the JSON buffers — 4x the memory hardness of the old RP2040
-/// build. `t_cost` = 14 targets ≈1 s of Argon2 compute per guess on the
+/// alongside the JSON buffers — 4x the memory hardness of the earlier 64 KiB
+/// setting. `t_cost` = 14 targets ≈1 s of Argon2 compute per guess on the
 /// 150 MHz Cortex-M33 (estimate; re-tuned against real unlock timings during
 /// HIL bring-up). The value is persisted, so a device's cost is fixed at init
 /// time. Note the offline story no longer rests on Argon2 alone: the KEK is

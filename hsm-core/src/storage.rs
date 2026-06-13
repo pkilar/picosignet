@@ -234,9 +234,9 @@ impl DeviceConfig {
 }
 
 /// How the CA seed in a [`KeyBlob`] is wrapped. Discriminants 1/2 were the v1
-/// (RP2040-era) wraps without the OTP device-secret binding; they are
-/// deliberately rejected by [`KeyBlob::from_bytes`] so a v1 blob can never be
-/// presented to a v2 device.
+/// wraps without the OTP device-secret binding; they are deliberately rejected
+/// by [`KeyBlob::from_bytes`] so a v1 blob can never be presented to a v2
+/// device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WrapType {
     /// OTP-secret-derived KEK (dev mode).

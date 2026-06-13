@@ -36,9 +36,9 @@ so only firmware signed with the project boot key ever runs (see
 - **Flash chip-off / dump — both modes.** The QSPI flash is external and always
   dumpable, but a dump alone is now useless: the KEK is bound to the OTP device
   secret inside the RP2350 die. There is nothing to brute-force offline without
-  first extracting the OTP secret from the chip. This closes the RP2040 build's
-  biggest hole (offline Argon2id PIN grinding against a flash image) and makes
-  even dev mode resist at-rest capture.
+  first extracting the OTP secret from the chip — so offline Argon2id PIN
+  grinding against a flash image is impossible, and even dev mode resists
+  at-rest capture.
 - **Stolen production device.** Signing requires the PIN. PIN correctness is
   the AEAD tag check (no faster oracle); each *online* guess costs a full
   Argon2id pass (m = 256 KiB, t tuned to ≈1 s on-device).
@@ -61,7 +61,8 @@ so only firmware signed with the project boot key ever runs (see
   provisioning can force-arm them from boot ROM (`CRIT1.GLITCH_DETECTOR_*`).
 - **Blob/config tampering & swapping.** The AEAD AAD binds the wrapped seed to
   its wrap type and public key. A/B records are CRC-protected with sequence
-  numbers. v1 (RP2040-era) blobs are rejected outright.
+  numbers. Legacy v1 key blobs (the earlier wrap format without the OTP
+  binding) are rejected outright.
 - **Entropy failure at key generation.** Raw TRNG output (hardware
   post-processing bypassed on purpose) is health-checked (repetition-count +
   adaptive-proportion) before seeding/keygen; a stuck or biased source yields

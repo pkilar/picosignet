@@ -55,7 +55,7 @@ magic "UHSM" (u32) | version (u16) | seq (u32) | payload_len (u16) | payload | c
 - `ciphertext` is the 32-byte Ed25519 seed, AEAD-sealed with ChaCha20-Poly1305.
 - AEAD AAD = `wrap_type ‖ pubkey`, so a blob cannot be presented under a
   different wrap type or paired with a different public key.
-- Wrap types 1/2 were the RP2040-era (v1) wraps without the OTP binding; the
+- Wrap types 1/2 were the earlier v1 wraps without the OTP binding; the
   parser rejects them.
 
 ## OTP allocation (on-die, 64 pages × 64 ECC rows × 16 data bits)

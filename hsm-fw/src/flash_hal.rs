@@ -39,10 +39,10 @@ impl<'d> EmbassyFlash<'d> {
     /// the boot-loaded OTP secret.
     pub fn new(flash: FLASH, device_secret: Result<Zeroizing<[u8; 32]>, HalError>) -> Self {
         let flash = Flash::<_, Blocking, FLASH_SIZE>::new_blocking(flash);
-        // RP2350: the device serial comes from the factory-programmed chip id
-        // in OTP (rows 0x000-0x003) — on-die, unlike the RP2040's QSPI-flash
-        // UID. A failure leaves it all-zero; the serial degrades gracefully
-        // rather than panicking at boot.
+        // The device serial comes from the factory-programmed chip id in OTP
+        // (rows 0x000-0x003) — on-die, not a flash-resident UID. A failure
+        // leaves it all-zero; the serial degrades gracefully rather than
+        // panicking at boot.
         let uid = embassy_rp::otp::get_chipid()
             .map(u64::to_be_bytes)
             .unwrap_or([0u8; 8]);

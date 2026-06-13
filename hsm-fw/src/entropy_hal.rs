@@ -6,7 +6,7 @@
 //! health checks (repetition-count + adaptive-proportion) see the *real*
 //! source — a stuck or biased oscillator must fail our gates, not be papered
 //! over in hardware — and the SHA-512 conditioner + ChaCha20 DRBG remain the
-//! trust boundary, exactly as with the RP2040 ROSC design this replaces.
+//! trust boundary.
 //!
 //! Supplementary per-boot entropy from uninitialized SRAM is exposed separately
 //! via [`boot_noise`] and folded into the DRBG by the firmware *after* seeding,
