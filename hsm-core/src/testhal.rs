@@ -19,6 +19,8 @@ pub struct MockFlash {
     pin_counter: [u8; SECTOR_LEN],
     unique_id: [u8; 8],
     device_secret: Result<[u8; 32], HalError>,
+    /// When true, `erase` fails — used to test fail-closed erase/wipe paths.
+    erase_fault: bool,
 }
 
 /// Fixed mock OTP device secret (32 bytes). Deterministic so golden and
@@ -42,7 +44,14 @@ impl MockFlash {
             pin_counter: [0xFF; SECTOR_LEN],
             unique_id: [0x42; 8],
             device_secret: Ok(MOCK_DEVICE_SECRET),
+            erase_fault: false,
         }
+    }
+
+    /// Test helper: make every `erase` fail, simulating a flash that cannot be
+    /// cleared (so reset/lockout-wipe must fail closed rather than claim success).
+    pub fn set_erase_fault(&mut self, on: bool) {
+        self.erase_fault = on;
     }
 
     pub fn with_unique_id(id: [u8; 8]) -> Self {
@@ -148,6 +157,9 @@ impl FlashStore for MockFlash {
     }
 
     fn erase(&mut self, region: Region) -> Result<(), HalError> {
+        if self.erase_fault {
+            return Err(HalError::Flash);
+        }
         self.region_mut(region).fill(0xFF);
         Ok(())
     }

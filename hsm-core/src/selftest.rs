@@ -59,7 +59,14 @@ pub fn aead_kat() -> bool {
     let kek = dev_kek(&[0xA5; 32]);
     let seed = [0x33u8; 32];
     let pubkey = [0x44u8; 32];
-    let mut blob = wrap_seed(&kek, &seed, &pubkey, WrapType::DevKek, &[0u8; 12]);
+    let mut blob = wrap_seed(
+        &kek,
+        &seed,
+        &pubkey,
+        WrapType::DevKek,
+        &[0u8; 16],
+        &[0u8; 12],
+    );
     match unwrap_seed(&kek, &blob) {
         Ok(s) if *s == seed => {}
         _ => return false,
