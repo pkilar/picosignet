@@ -34,14 +34,7 @@ SSH user certificates, signed by a CA whose private half is sealed in hardware.
 
 ## Architecture
 
-```
-   ┌────────────────────────── workstation / server ─────────────────────────────────┐
-   │                                                                                 │
-   │   ssh-cert-api ──vsock/tcp/unix──▶ picosignet bridge ──USB CDC-ACM──▶ device  │
-   │   (unmodified)    newline JSON      (Go, host/)     newline JSON  (RP2350)      │
-   │                                                                                 │
-   └─────────────────────────────────────────────────────────────────────────────────┘
-```
+![PicoSignet architecture](docs/architecture.svg)
 
 - **`hsm-core`** — `no_std`+`alloc` Rust library holding *all* the logic: the
   protocol state machine, request validation (byte-compatible with cerberus),
