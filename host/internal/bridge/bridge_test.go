@@ -93,7 +93,7 @@ func (s *simConn) provisionDev(t *testing.T) {
 // startBridge runs a bridge over a unix socket and returns its path.
 func startBridge(t *testing.T, conn *simConn, allowRemoteMgmt bool) string {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "usbhsm.sock")
+	sock := filepath.Join(t.TempDir(), "PicoSignet.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {

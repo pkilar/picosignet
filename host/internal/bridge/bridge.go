@@ -1,4 +1,4 @@
-// Package bridge exposes a usbhsm device's newline-JSON protocol over VSOCK,
+// Package bridge exposes a PicoSignet device's newline-JSON protocol over VSOCK,
 // TCP, and Unix sockets, so cerberus ssh-cert-api (or any client of the enclave
 // protocol) can talk to the hardware key unmodified. It reproduces the
 // enclave's framing and limits (one JSON object per line, 256 KiB max, 32
@@ -20,8 +20,8 @@ import (
 
 	"github.com/mdlayher/vsock"
 
-	"github.com/pkilar/usbhsm/host/internal/device"
-	"github.com/pkilar/usbhsm/host/internal/hsmproto"
+	"github.com/pkilar/picosignet/host/internal/device"
+	"github.com/pkilar/picosignet/host/internal/hsmproto"
 )
 
 const (

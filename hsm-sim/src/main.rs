@@ -1,4 +1,4 @@
-//! Host simulator for usbhsm.
+//! Host simulator for PicoSignet.
 //!
 //! Wires `hsm-core` to the in-memory mock HAL and pumps newline-delimited JSON
 //! between stdin and stdout, exactly as the firmware does over USB CDC-ACM.

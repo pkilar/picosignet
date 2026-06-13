@@ -1,4 +1,4 @@
-// Package cli implements the usbhsm provisioning/management commands and the
+// Package cli implements the PicoSignet provisioning/management commands and the
 // bridge launcher.
 package cli
 
@@ -22,9 +22,9 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 
-	"github.com/pkilar/usbhsm/host/internal/bridge"
-	"github.com/pkilar/usbhsm/host/internal/device"
-	"github.com/pkilar/usbhsm/host/internal/hsmproto"
+	"github.com/pkilar/picosignet/host/internal/bridge"
+	"github.com/pkilar/picosignet/host/internal/device"
+	"github.com/pkilar/picosignet/host/internal/hsmproto"
 )
 
 // Run dispatches a subcommand. Returns a process exit code.
@@ -66,21 +66,21 @@ func Run(args []string) int {
 		usage()
 		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "usbhsm: unknown command %q\n", cmd)
+		fmt.Fprintf(os.Stderr, "picosignet: unknown command %q\n", cmd)
 		usage()
 		return 2
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "usbhsm %s: %v\n", cmd, err)
+		fmt.Fprintf(os.Stderr, "picosignet %s: %v\n", cmd, err)
 		return 1
 	}
 	return 0
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `usbhsm — RP2350 SSH-certificate HSM companion
+	fmt.Fprint(os.Stderr, `PicoSignet — RP2350 SSH-certificate HSM companion
 
-usage: usbhsm <command> [flags]
+usage: picosignet <command> [flags]
 
   bridge         expose the device over vsock/tcp/unix for ssh-cert-api
   init           initialize the device (dev or prod mode)
@@ -465,7 +465,7 @@ func cmdAddEntropy(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: usbhsm add-entropy <hex>")
+		return errors.New("usage: picosignet add-entropy <hex>")
 	}
 	conn, err := openDevice(c)
 	if err != nil {
@@ -533,7 +533,7 @@ func cmdSelfTest(args []string) error {
 
 	signReq := messages.Request{SignSshKey: &messages.EnclaveSigningRequest{
 		SSHKey:     userLine,
-		KeyID:      "usbhsm-self-test",
+		KeyID:      "picosignet-self-test",
 		Principals: []string{"selftest"},
 		Validity:   "5m",
 	}}

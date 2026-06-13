@@ -1,4 +1,4 @@
-# usbhsm developer tasks.
+# PicoSignet developer tasks.
 #
 # Host crates (hsm-core, hsm-sim) build/test on the workstation; firmware
 # (hsm-fw) cross-builds for the RP2350's Cortex-M33. The Go host tool lives
@@ -10,8 +10,8 @@ FW_BIN    := target/$(FW_TARGET)/release/hsm-fw
 # Boot-signing material for production secure boot (gitignored; see
 # docs/PROVISIONING.md). Losing the key bricks updates on burned devices.
 KEYS_DIR := keys
-BOOT_KEY := $(KEYS_DIR)/usbhsm-boot.pem
-BOOT_OTP := $(KEYS_DIR)/usbhsm-bootkey-otp.json
+BOOT_KEY := $(KEYS_DIR)/PicoSignet-boot.pem
+BOOT_OTP := $(KEYS_DIR)/picosignet-bootkey-otp.json
 
 .PHONY: all
 all: test build-fw go-test
@@ -78,8 +78,8 @@ go-build:
 	cd host && go build ./...
 
 .PHONY: install
-install:              ## install the usbhsm CLI to $(GOPATH)/bin (on PATH)
-	cd host && go install ./cmd/usbhsm
+install:              ## install the PicoSignet CLI to $(GOPATH)/bin (on PATH)
+	cd host && go install ./cmd/picosignet
 
 .PHONY: go-test
 go-test:

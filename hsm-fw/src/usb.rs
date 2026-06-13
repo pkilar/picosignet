@@ -42,9 +42,9 @@ pub async fn run(_spawner: Spawner, p: Peripherals) {
     let driver = Driver::new(p.USB, Irqs);
 
     let mut config = Config::new(0x1209, 0x000A);
-    config.manufacturer = Some("usbhsm");
-    config.product = Some("usbhsm");
-    config.serial_number = Some("usbhsm-0");
+    config.manufacturer = Some("PicoSignet");
+    config.product = Some("PicoSignet");
+    config.serial_number = Some("picosignet-0");
     config.max_power = 100;
     config.max_packet_size_0 = PACKET as u8;
     config.device_class = 0xEF;

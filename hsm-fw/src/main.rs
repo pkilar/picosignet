@@ -1,4 +1,4 @@
-//! usbhsm firmware entry point (RP2350).
+//! PicoSignet firmware entry point (RP2350).
 //!
 //! Initializes the heap and Embassy, then runs the USB CDC-ACM transport that
 //! pumps newline-delimited JSON to `hsm-core`'s dispatcher. The HAL trait impls

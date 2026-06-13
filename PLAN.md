@@ -1,4 +1,4 @@
-# usbhsm — USB HSM for SSH Certificate Signing (original implementation plan)
+# PicoSignet — USB HSM for SSH Certificate Signing (original implementation plan)
 
 > **Superseded note (2026-06-12, v0.3.0):** the project is now **RP2350-only**.
 > RP2040 support was removed entirely in favor of the RP2350's security
@@ -37,7 +37,7 @@ Must replicate exactly:
 ## Architecture & repo layout
 
 ```
-usbhsm/
+PicoSignet/
 ├── Cargo.toml                # workspace: hsm-core, hsm-sim, hsm-fw (fw built via --target thumbv6m-none-eabi)
 ├── rust-toolchain.toml       # pinned stable + thumbv6m-none-eabi
 ├── .cargo/config.toml        # runner = probe-rs / elf2uf2-rs
@@ -53,8 +53,8 @@ usbhsm/
 ├── hsm-fw/                   # thin Embassy RP2040 binary
 │   └── src/: main.rs, usb.rs (CDC-ACM), lineio.rs (16 KiB line assembler),
 │       flash_hal.rs, entropy_hal.rs, time_hal.rs; memory.x (last 24 KiB carved out)
-├── host/                     # Go module github.com/pkilar/usbhsm/host — single `usbhsm` binary
-│   ├── cmd/usbhsm/main.go
+├── host/                     # Go module github.com/pkilar/picosignet/host — single `PicoSignet` binary
+│   ├── cmd/picosignet/main.go
 │   └── internal/: device/ (serial discovery + mutex RoundTrip),
 │       hsmproto/ (Go mirror of hsm envelope), bridge/ (vsock/tcp/unix listeners),
 │       cli/ (init, generate-key, pubkey, unlock, lock, status, set-time,
@@ -74,7 +74,7 @@ Management errors return INSIDE the hsm response (`{"hsm":{"error":{"code":"ERR_
 | Command | Request | Success response |
 |---|---|---|
 | init | `{"hsm":{"init":{"mode":"dev"}}}` / `{"hsm":{"init":{"mode":"prod","pin":"…","maxRetries":10,"wipeOnLockout":false}}}` (pin 6–64 bytes) | `{"hsm":{"init":{"ok":true,"mode":"prod"}}}` |
-| generateKey | `{"hsm":{"generateKey":{"force":false}}}` | `{"hsm":{"generateKey":{"ok":true,"publicKey":"ssh-ed25519 AAAA… usbhsm-ca"}}}` |
+| generateKey | `{"hsm":{"generateKey":{"force":false}}}` | `{"hsm":{"generateKey":{"ok":true,"publicKey":"ssh-ed25519 AAAA… picosignet-ca"}}}` |
 | getPublicKey | `{"hsm":{"getPublicKey":{}}}` | `{"hsm":{"getPublicKey":{"publicKey":"…"}}}` (works while ProdLocked — pubkey stored plaintext) |
 | unlock | `{"hsm":{"unlock":{"pin":"…"}}}` | `{"hsm":{"unlock":{"ok":true}}}`; fail → error with `remainingAttempts`, `backoffMs` |
 | lock | `{"hsm":{"lock":{}}}` | `{"hsm":{"lock":{"ok":true}}}` |
@@ -130,8 +130,8 @@ Raw: ROSC RANDOMBIT with timer-jittered sampling + von Neumann debias; ADC temp-
 
 ## Go host tool
 
-- `device`: enumerate `/dev/serial/by-id/*usbhsm*` (fallback VID:PID via go.bug.st/serial), mutex-serialized RoundTrip with 10 s timeout, reconnect-on-error.
-- `bridge`: `usbhsm bridge --listen vsock:5000,tcp:…,unix:…`; 32-conn semaphore; per-conn bufio.Scanner 64 KiB/256 KiB, 5 s deadlines (exact signer behavior); forwards lines to device; **management firewall** — reject top-level `hsm` lines from network clients unless `--allow-remote-mgmt`; bridge itself sends `setTime` on (re)connect + every 5 min.
+- `device`: enumerate `/dev/serial/by-id/*PicoSignet*` (fallback VID:PID via go.bug.st/serial), mutex-serialized RoundTrip with 10 s timeout, reconnect-on-error.
+- `bridge`: `picosignet bridge --listen vsock:5000,tcp:…,unix:…`; 32-conn semaphore; per-conn bufio.Scanner 64 KiB/256 KiB, 5 s deadlines (exact signer behavior); forwards lines to device; **management firewall** — reject top-level `hsm` lines from network clients unless `--allow-remote-mgmt`; bridge itself sends `setTime` on (re)connect + every 5 min.
 - VSOCK CID-16 caveat: on non-Nitro hosts a listener can't be CID 16; document options (api-side CID override env, VM with CID 16, socat) in PROTOCOL.md.
 - CLI: unlock prompts via x/term (no PIN in argv); factory-reset requires typing ERASE; self-test signs and verifies a cert via x/crypto/ssh.
 
@@ -167,7 +167,7 @@ Raw: ROSC RANDOMBIT with timer-jittered sampling + von Neumann debias; ADC temp-
 1. `make test` — hsm-core unit + golden tests on host.
 2. `cd tests/differential && go test ./...` — field-level cert equality vs x/crypto/ssh.
 3. `make flash && tests/hil/run.sh /dev/serial/by-id/<dev>` — full dev+prod hardware flows.
-4. Drop-in proof: `usbhsm bridge --listen tcp:127.0.0.1:5000` + ssh-cert-api pointed at it → sign request returns a cert that `ssh-keygen -L` decodes and a sshd container accepts.
+4. Drop-in proof: `picosignet bridge --listen tcp:127.0.0.1:5000` + ssh-cert-api pointed at it → sign request returns a cert that `ssh-keygen -L` decodes and a sshd container accepts.
 5. Security checks: flash dump of a production-mode device yields no usable key without PIN (manual audit step); bad-PIN lockout and pre-tick behavior demonstrated in HIL.
 
 ## Threat model summary (to be expanded in docs/THREAT_MODEL.md)

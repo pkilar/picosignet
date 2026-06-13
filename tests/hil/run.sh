@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Hardware-in-the-loop end-to-end test for a flashed usbhsm device.
+# Hardware-in-the-loop end-to-end test for a flashed PicoSignet device.
 #
 # Exercises the full dev and production lifecycles against real hardware using
-# the usbhsm CLI, and verifies issued certificates with ssh-keygen -L. This is
+# the PicoSignet CLI, and verifies issued certificates with ssh-keygen -L. This is
 # DESTRUCTIVE: it factory-resets the device.
 #
 # Usage:  tests/hil/run.sh [/dev/serial/by-id/...]
@@ -18,15 +18,15 @@ port="${1:-}"
 portflag=()
 [ -n "$port" ] && portflag=(--port "$port")
 
-echo "hil: building usbhsm CLI"
-(cd "$root/host" && go build -o "$root/target/usbhsm" ./cmd/usbhsm)
-cli="$root/target/usbhsm"
+echo "hil: building PicoSignet CLI"
+(cd "$root/host" && go build -o "$root/target/picosignet" ./cmd/picosignet)
+cli="$root/target/picosignet"
 
-run() { echo "+ usbhsm $*"; "$cli" "${portflag[@]}" "$@"; }
+run() { echo "+ picosignet $*"; "$cli" "${portflag[@]}" "$@"; }
 
 # Confirm a device is present before doing anything destructive.
 if ! "$cli" "${portflag[@]}" status >/dev/null 2>&1; then
-  echo "hil: no usbhsm device found (flash the firmware and plug it in)" >&2
+  echo "hil: no PicoSignet device found (flash the firmware and plug it in)" >&2
   exit 1
 fi
 

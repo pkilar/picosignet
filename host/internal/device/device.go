@@ -1,4 +1,4 @@
-// Package device talks to the usbhsm hardware over its USB CDC-ACM serial port,
+// Package device talks to the PicoSignet hardware over its USB CDC-ACM serial port,
 // speaking the same newline-delimited JSON the cerberus enclave does. A single
 // device processes one request at a time, so RoundTrip is mutex-serialized.
 package device
@@ -19,8 +19,8 @@ import (
 )
 
 // USB identifiers the firmware advertises. 0x1209 is the pid.codes community
-// VID; the PID is a usbhsm allocation (interim — see docs/PROTOCOL.md). The
-// product string "usbhsm" also appears under /dev/serial/by-id for matching.
+// VID; the PID is a PicoSignet allocation (interim — see docs/PROTOCOL.md). The
+// product string "PicoSignet" also appears under /dev/serial/by-id for matching.
 const (
 	usbVID = "1209"
 	usbPID = "000A"
@@ -50,7 +50,7 @@ type Serial struct {
 // Discover finds the device's serial path: first via the stable
 // /dev/serial/by-id symlink, then by USB VID:PID enumeration.
 func Discover() (string, error) {
-	if matches, _ := filepath.Glob("/dev/serial/by-id/*usbhsm*"); len(matches) > 0 {
+	if matches, _ := filepath.Glob("/dev/serial/by-id/*PicoSignet*"); len(matches) > 0 {
 		return matches[0], nil
 	}
 	ports, err := enumerator.GetDetailedPortsList()
@@ -65,7 +65,7 @@ func Discover() (string, error) {
 			return p.Name, nil
 		}
 	}
-	return "", errors.New("no usbhsm device found (set the path explicitly with --port)")
+	return "", errors.New("no PicoSignet device found (set the path explicitly with --port)")
 }
 
 // Open opens the device at path. An empty path triggers Discover.

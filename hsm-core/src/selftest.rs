@@ -38,12 +38,12 @@ pub fn ed25519_kat() -> bool {
     if ca.public_bytes() != ED_PUB {
         return false;
     }
-    let sig = ca.sign(b"usbhsm-selftest");
+    let sig = ca.sign(b"picosignet-selftest");
     let vk = match VerifyingKey::from_bytes(&ca.public_bytes()) {
         Ok(v) => v,
         Err(_) => return false,
     };
-    vk.verify(b"usbhsm-selftest", &Signature::from_bytes(&sig))
+    vk.verify(b"picosignet-selftest", &Signature::from_bytes(&sig))
         .is_ok()
 }
 

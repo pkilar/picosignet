@@ -1,4 +1,4 @@
-//! usbhsm core: the entire protocol state machine, validation, crypto, key
+//! PicoSignet core: the entire protocol state machine, validation, crypto, key
 //! wrapping, and flash storage logic for the RP2350 SSH-certificate HSM.
 //!
 //! Everything hardware-specific lives behind the traits in [`hal`]; the

@@ -1,4 +1,4 @@
-/* RP2350 flash/RAM layout for usbhsm (Waveshare RP2350-One, 4 MiB QSPI flash).
+/* RP2350 flash/RAM layout for PicoSignet (Waveshare RP2350-One, 4 MiB QSPI flash).
  *
  * The last six 4 KiB sectors of the 4 MiB flash are carved out of the FLASH
  * region so firmware code/rodata can never grow into the persistent HSM state.

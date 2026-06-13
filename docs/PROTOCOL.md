@@ -1,4 +1,4 @@
-# usbhsm wire protocol
+# PicoSignet wire protocol
 
 The device speaks the cerberus `ssh-cert-signer` protocol verbatim, plus an
 additive `hsm` management envelope. This document is the authoritative wire
@@ -85,7 +85,7 @@ Error object: `{"code":"ERR_*","message":"…","remainingAttempts":N,"backoffMs"
 | ---------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | init (dev)       | `{"hsm":{"init":{"mode":"dev"}}}`                                                  | `{"hsm":{"init":{"ok":true,"mode":"dev"}}}`                                                                                      |
 | init (prod)      | `{"hsm":{"init":{"mode":"prod","pin":"…","maxRetries":10,"wipeOnLockout":false}}}` | `{"hsm":{"init":{"ok":true,"mode":"prod"}}}`                                                                                     |
-| generateKey      | `{"hsm":{"generateKey":{"force":false}}}`                                          | `{"hsm":{"generateKey":{"ok":true,"publicKey":"ssh-ed25519 AAAA… usbhsm-ca"}}}`                                                  |
+| generateKey      | `{"hsm":{"generateKey":{"force":false}}}`                                          | `{"hsm":{"generateKey":{"ok":true,"publicKey":"ssh-ed25519 AAAA… picosignet-ca"}}}`                                                  |
 | getPublicKey     | `{"hsm":{"getPublicKey":{}}}`                                                      | `{"hsm":{"getPublicKey":{"publicKey":"…"}}}`                                                                                     |
 | unlock           | `{"hsm":{"unlock":{"pin":"…"}}}`                                                   | `{"hsm":{"unlock":{"ok":true}}}`                                                                                                 |
 | lock             | `{"hsm":{"lock":{}}}`                                                              | `{"hsm":{"lock":{"ok":true}}}`                                                                                                   |
@@ -190,4 +190,4 @@ affect a correctly-formed signing request:
    in a VM whose CID is 16, or `socat` a vsock CID-16 listener to the bridge.
    See `docs/PROVISIONING.md`.
 4. **USB VID/PID**: interim `1209:000A` (pid.codes community VID) with product
-   string `usbhsm`; apply for a permanent pid.codes PID before distribution.
+   string `PicoSignet`; apply for a permanent pid.codes PID before distribution.

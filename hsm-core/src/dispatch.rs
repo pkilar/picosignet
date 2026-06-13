@@ -47,7 +47,7 @@ const DEFAULT_ARGON: Argon2Params = Argon2Params {
 const PIN_MIN: usize = 6;
 const PIN_MAX: usize = 64;
 const MAX_ENTROPY_HEX: usize = 1024;
-const CA_COMMENT: &str = "usbhsm-ca";
+const CA_COMMENT: &str = "picosignet-ca";
 
 /// The CA seed and the wrapping KEK recovered by a successful PIN verification.
 type UnlockedSeed = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>);

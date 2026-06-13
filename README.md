@@ -1,4 +1,4 @@
-# usbhsm
+# PicoSignet
 
 An RP2350-based USB security key that acts as an SSH certificate-signing HSM,
 **drop-in wire-compatible** with the cerberus `ssh-cert-signer` (an AWS Nitro
@@ -26,7 +26,7 @@ Two operating modes:
 
 ## Why
 
-cerberus anchors trust in AWS Nitro Enclaves + KMS attestation. `usbhsm` moves
+cerberus anchors trust in AWS Nitro Enclaves + KMS attestation. `PicoSignet` moves
 that anchor onto a physical key you hold: the same short-lived, principal-scoped
 SSH user certificates, signed by a CA whose private half is sealed in hardware.
 
@@ -35,7 +35,7 @@ SSH user certificates, signed by a CA whose private half is sealed in hardware.
 ```
    ┌────────────────────────── workstation / server ──────────────────────────┐
    │                                                                           │
-   │   ssh-cert-api ──vsock/tcp/unix──▶ usbhsm bridge ──USB CDC-ACM──▶ device  │
+   │   ssh-cert-api ──vsock/tcp/unix──▶ picosignet bridge ──USB CDC-ACM──▶ device  │
    │   (unmodified)    newline JSON      (Go, host/)     newline JSON  (RP2350) │
    │                                                                           │
    └───────────────────────────────────────────────────────────────────────────┘
@@ -52,7 +52,7 @@ SSH user certificates, signed by a CA whose private half is sealed in hardware.
   glitch detectors, timer) and runs `hsm-core`'s dispatcher.
 - **`hsm-sim`** — a host binary that runs `hsm-core` against an in-memory HAL
   over stdin/stdout, used by the differential test suite.
-- **`host/`** — the Go `usbhsm` tool: a bridge daemon (serial ↔ vsock/tcp/unix)
+- **`host/`** — the Go `PicoSignet` tool: a bridge daemon (serial ↔ vsock/tcp/unix)
   and a provisioning/management CLI. Reuses cerberus's `messages` module for the
   signer-path wire types.
 
@@ -63,7 +63,7 @@ SSH user certificates, signed by a CA whose private half is sealed in hardware.
 | `hsm-core/` | core library (protocol, crypto, storage, state machine) |
 | `hsm-sim/` | stdin/stdout simulator |
 | `hsm-fw/` | RP2350 Embassy firmware |
-| `host/` | Go bridge + CLI (`usbhsm`) |
+| `host/` | Go bridge + CLI (`PicoSignet`) |
 | `tests/differential/` | Go suite: HSM certs round-tripped through `x/crypto/ssh` |
 | `tests/golden/` | deterministic golden-vector certs verified with `ssh-keygen -L` |
 | `tests/hil/` | hardware-in-the-loop end-to-end script |
@@ -94,21 +94,21 @@ checks) `ssh-keygen`.
 make uf2 && cp target/thumbv8m.main-none-eabihf/release/hsm-fw.uf2 /run/media/$USER/RP2350/
 
 # 2. Provision a dev key and export the CA public key.
-usbhsm init
-usbhsm generate-key
-usbhsm pubkey > cerberus-ca.pub
+picosignet init
+picosignet generate-key
+picosignet pubkey > cerberus-ca.pub
 
 # 3. Trust the CA on your SSH servers.
 #    /etc/ssh/sshd_config:  TrustedUserCAKeys /etc/ssh/cerberus-ca.pub
 
 # 4. Run the bridge so ssh-cert-api can use the device.
-usbhsm bridge --listen tcp:127.0.0.1:5000
+picosignet bridge --listen tcp:127.0.0.1:5000
 
 # 5. Confirm everything end-to-end.
-usbhsm self-test
+picosignet self-test
 ```
 
-For production mode (`usbhsm init --prod`), the secure-boot lockdown runbook,
+For production mode (`picosignet init --prod`), the secure-boot lockdown runbook,
 and deployment details, see `docs/PROVISIONING.md`. For what the RP2350
 security hardware does and does not buy (OTP-bound keys, glitch detectors,
 signed boot — and the honest residual risks), see `docs/THREAT_MODEL.md`.

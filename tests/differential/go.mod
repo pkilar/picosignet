@@ -1,4 +1,4 @@
-module usbhsm-differential
+module picosignet-differential
 
 go 1.26.0
 

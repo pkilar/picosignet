@@ -16,23 +16,23 @@ make flash
 ```
 
 The device enumerates as a USB CDC-ACM serial port (`1209:000A`, product
-`usbhsm`), discoverable at `/dev/serial/by-id/*usbhsm*`. All `usbhsm` commands
+`PicoSignet`), discoverable at `/dev/serial/by-id/*PicoSignet*`. All `PicoSignet` commands
 accept `--port <path>` to override auto-discovery.
 
 **First boot self-provisions the OTP device secret** (see
 `FLASH_LAYOUT.md`): the firmware burns a TRNG-generated 32-byte secret into an
 on-die OTP page and permanently locks the page against the bootloader and
-non-secure access. This is a one-time, per-chip event; `usbhsm status` should
+non-secure access. This is a one-time, per-chip event; `picosignet status` should
 show `otp secret: true` from then on. Reflashing the firmware does not touch
 it.
 
 ## 1a. Dev mode (no PIN; for development hosts)
 
 ```sh
-usbhsm init               # dev mode
-usbhsm generate-key       # generate the on-device CA key, prints the public key
-usbhsm pubkey > cerberus-ca.pub
-usbhsm status
+picosignet init               # dev mode
+picosignet generate-key       # generate the on-device CA key, prints the public key
+picosignet pubkey > cerberus-ca.pub
+picosignet status
 ```
 
 The device is operational immediately on every plug-in. The dev wrapping key is
@@ -44,11 +44,11 @@ acceptable (see `THREAT_MODEL.md`).
 ## 1b. Production mode (PIN-protected)
 
 ```sh
-usbhsm init --prod --max-retries 10           # prompts for a PIN twice
+picosignet init --prod --max-retries 10           # prompts for a PIN twice
 # init in prod mode generates the CA key as part of init.
-usbhsm pubkey > cerberus-ca.pub               # works while locked
-usbhsm unlock                                  # prompts for the PIN
-usbhsm status                                  # state: prodReady
+picosignet pubkey > cerberus-ca.pub               # works while locked
+picosignet unlock                                  # prompts for the PIN
+picosignet status                                  # state: prodReady
 ```
 
 Use a strong passphrase. The KEK is bound to the on-die OTP secret, so offline
@@ -57,9 +57,9 @@ defends against *online* guessing (rate-limited, ≈1 s Argon2id per attempt,
 lockout after `--max-retries`) and against an attacker who has also defeated
 the chip's OTP protections. Add `--wipe-on-lockout` if you prefer key
 destruction over availability after a brute-force attempt. Re-lock when idle
-with `usbhsm lock`; rotate the passphrase with `usbhsm change-pin`.
+with `picosignet lock`; rotate the passphrase with `picosignet change-pin`.
 
-To change modes later, `usbhsm factory-reset` (destroys the key) then `init`
+To change modes later, `picosignet factory-reset` (destroys the key) then `init`
 again — there is no in-place dev↔prod switch.
 
 ## 1c. Production lockdown: secure boot (IRREVERSIBLE)
@@ -72,12 +72,12 @@ This is a staged, partially **irreversible** process driven by
 board, so the script gates every fuse write behind a typed confirmation.
 
 ```sh
-make keygen          # one-time secp256k1 boot key -> keys/usbhsm-boot.pem
+make keygen          # one-time secp256k1 boot key -> keys/picosignet-boot.pem
                      #   BACK IT UP OFFLINE, TWICE. After P4, losing it
                      #   permanently bricks firmware updates.
-make uf2-signed      # signed+sealed UF2 + keys/usbhsm-bootkey-otp.json
+make uf2-signed      # signed+sealed UF2 + keys/picosignet-bootkey-otp.json
 
-usbhsm reboot-bootloader                  # device into BOOTSEL for each stage
+picosignet reboot-bootloader                  # device into BOOTSEL for each stage
 scripts/provision_production.sh P1       # flash SIGNED image; run full HIL
 scripts/provision_production.sh P2       # [BURN] boot-key hash (BOOTKEY0)
 scripts/provision_production.sh P3       # power-cycle check (nothing burned)
@@ -93,10 +93,10 @@ Order of operations is the safety mechanism:
 - **P1** proves the *signed* image boots while the bootrom still ignores
   signatures — validating the seal pipeline before anything irreversible.
 - **P2** burns only the key hash; the device still boots anything. Verify the
-  burned rows against `keys/usbhsm-bootkey-otp.json` (`picotool otp get`)
+  burned rows against `keys/picosignet-bootkey-otp.json` (`picotool otp get`)
   before going further.
 - **P4** flips enforcement. Immediately verify: the signed image boots,
-  `usbhsm status` shows `secure boot: true`, and an **unsigned** UF2 is
+  `picosignet status` shows `secure boot: true`, and an **unsigned** UF2 is
   refused.
 - **P5** items are independent and each gated: ROM-level glitch-detector
   force-arm, debug-port disable, and PICOBOOT disable (picotool stops working
@@ -129,13 +129,13 @@ away from network clients by default.
 
 ```sh
 # TCP (simplest for a non-Nitro host):
-usbhsm bridge --listen tcp:127.0.0.1:5000
+picosignet bridge --listen tcp:127.0.0.1:5000
 
 # Unix socket:
-usbhsm bridge --listen unix:/run/usbhsm.sock
+picosignet bridge --listen unix:/run/PicoSignet.sock
 
 # VSOCK (Nitro-style drop-in — see the CID-16 note below):
-usbhsm bridge --listen vsock:5000
+picosignet bridge --listen vsock:5000
 ```
 
 `ssh-cert-api` dials VSOCK **CID 16, port 5000**. On a plain Linux host you cannot
@@ -146,23 +146,23 @@ API at the bridge instead. In order of preference:
   (implemented on the cerberus `usbhsm-signer-endpoint` branch — `enclave/endpoint.go`):
 
   ```sh
-  usbhsm bridge --listen tcp:127.0.0.1:5000 &
+  picosignet bridge --listen tcp:127.0.0.1:5000 &
   CERBERUS_SIGNER_ENDPOINT=tcp://127.0.0.1:5000 ssh-cert-api ...
   # or over a unix socket:
-  usbhsm bridge --listen unix:/run/usbhsm.sock &
-  CERBERUS_SIGNER_ENDPOINT=unix:///run/usbhsm.sock ssh-cert-api ...
+  picosignet bridge --listen unix:/run/PicoSignet.sock &
+  CERBERUS_SIGNER_ENDPOINT=unix:///run/PicoSignet.sock ssh-cert-api ...
   ```
 
   Unset, ssh-cert-api behaves exactly as before (VSOCK CID 16) — the override is
   opt-in and transport-transparent (same framing/deadlines).
 
   Note: on a non-Nitro host, ssh-cert-api's startup `LoadKeySigner` also fetches
-  AWS credentials from IMDS and starts a KMS VSOCK proxy. The usbhsm device
+  AWS credentials from IMDS and starts a KMS VSOCK proxy. The PicoSignet device
   ignores the credentials, but those startup steps assume an EC2/Nitro
   environment; running fully off-Nitro may need them stubbed/skipped separately.
 
 - Run the bridge inside a VM whose guest CID is set to 16 (no api change).
-- `socat VSOCK-LISTEN:5000,fork TCP:127.0.0.1:5000` alongside `usbhsm bridge
+- `socat VSOCK-LISTEN:5000,fork TCP:127.0.0.1:5000` alongside `picosignet bridge
   --listen tcp:127.0.0.1:5000` (no api change).
 
 Only enable `--allow-remote-mgmt` if you deliberately want provisioning over the
@@ -171,7 +171,7 @@ network; by default, `init`/`unlock`/`generateKey`/etc. are local-CLI only.
 ## 4. Verify end-to-end
 
 ```sh
-usbhsm self-test
+picosignet self-test
 # runs the on-device KATs (incl. the OTP-secret presence check) AND signs a
 # throwaway key, verifying the certificate against the device CA with
 # x/crypto/ssh.
@@ -186,11 +186,11 @@ certificate is byte-identical to one the enclave would have produced (proven by
 ## Operational notes
 
 - **Time**: the device has no RTC. If you run management commands without the
-  bridge, `usbhsm set-time` first, or signing fails closed. The bridge handles
+  bridge, `picosignet set-time` first, or signing fails closed. The bridge handles
   this automatically.
 - **Reboots**: dev devices reload the key automatically; prod devices come up
   `prodLocked` and need `unlock` again.
-- **Security posture at a glance**: `usbhsm status` reports `otp secret`,
+- **Security posture at a glance**: `picosignet status` reports `otp secret`,
   `glitch det` (detectors armed), `secure boot` (enforcement burned), and warns
   if the last reset was a glitch-detector trigger.
 - **Backups**: there is intentionally no key export, and key blobs are bound to

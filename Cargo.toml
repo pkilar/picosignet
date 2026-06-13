@@ -1,4 +1,4 @@
-# usbhsm — RP2350 USB HSM for SSH certificate signing.
+# PicoSignet — RP2350 USB HSM for SSH certificate signing.
 #
 # Three crates:
 #   hsm-core  no_std+alloc library holding ALL protocol/crypto/state logic,
@@ -20,7 +20,7 @@ version = "0.3.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Paul Kilar"]
-repository = "https://github.com/pkilar/usbhsm"
+repository = "https://github.com/pkilar/picosignet"
 
 # Shared dependency versions. hsm-core pins the no_std+alloc feature sets; the
 # firmware and sim inherit the same hsm-core build.

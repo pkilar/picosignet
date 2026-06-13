@@ -1,4 +1,4 @@
-module github.com/pkilar/usbhsm/host
+module github.com/pkilar/picosignet/host
 
 go 1.26.0
 

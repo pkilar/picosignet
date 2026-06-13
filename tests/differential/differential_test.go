@@ -1,4 +1,4 @@
-// Differential tests: drive the usbhsm simulator and verify every issued
+// Differential tests: drive the PicoSignet simulator and verify every issued
 // certificate against golang.org/x/crypto/ssh — the exact library cerberus
 // ssh-cert-signer uses. The decisive check is a round-trip: x/crypto parses the
 // HSM's certificate and re-marshals it; if the bytes are identical, the HSM's

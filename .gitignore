@@ -9,7 +9,7 @@ Cargo.lock.bak
 *.hex
 
 # Go
-/host/usbhsm
+/host/picosignet
 /tests/differential/differential.test
 
 # Editor / OS

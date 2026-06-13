@@ -1,5 +1,5 @@
 // Package hsmproto mirrors the additive `hsm` management envelope that the
-// usbhsm device speaks on top of the cerberus signer protocol. The signer-path
+// PicoSignet device speaks on top of the cerberus signer protocol. The signer-path
 // types (signSshKey, ping, etc.) come from github.com/pkilar/cerberus/messages;
 // these types cover device provisioning and lifecycle.
 package hsmproto

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Production OTP provisioning for a usbhsm RP2350 device.
+# Production OTP provisioning for a PicoSignet RP2350 device.
 #
 # !!! THIS SCRIPT BURNS ONE-TIME-PROGRAMMABLE FUSES. STAGES P2/P4/P5 ARE !!!
 # !!! PERMANENT AND CANNOT BE UNDONE. A MISTAKE CAN BRICK THE BOARD.     !!!
@@ -10,22 +10,22 @@
 #   P2  burn the boot-key hash: BOOTKEY0 + BOOT_FLAGS1.KEY_VALID  [IRREVERSIBLE]
 #   P3  power-cycle check: signed image still boots               (reversible)
 #   P4  burn CRIT1.SECURE_BOOT_ENABLE                  [IRREVERSIBLE — point of
-#       no return: only images signed with keys/usbhsm-boot.pem will ever boot]
+#       no return: only images signed with keys/picosignet-boot.pem will ever boot]
 #   P5  optional hardening, each gated separately                 [IRREVERSIBLE]
 #
 # Run each stage explicitly:  scripts/provision_production.sh <P1|P2|P3|P4|P5>
-# The device must be in BOOTSEL mode for every stage (usbhsm reboot-bootloader,
+# The device must be in BOOTSEL mode for every stage (picosignet reboot-bootloader,
 # or hold BOOTSEL while plugging in). Every irreversible gate requires typing
 # the literal confirmation phrase.
 #
-# Prerequisites: make keygen && make uf2-signed; keys/usbhsm-boot.pem backed up
+# Prerequisites: make keygen && make uf2-signed; keys/picosignet-boot.pem backed up
 # OFFLINE, TWICE — after P4, losing it permanently bricks firmware updates.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$here/.."
 signed_uf2="$root/target/thumbv8m.main-none-eabihf/release/hsm-fw-signed.uf2"
-bootkey_otp="$root/keys/usbhsm-bootkey-otp.json"
+bootkey_otp="$root/keys/picosignet-bootkey-otp.json"
 
 stage="${1:-}"
 
@@ -66,19 +66,19 @@ P2)
     ;;
 P3)
     echo "P3: power-cycle the device (unplug/replug), confirm the signed image"
-    echo "boots and 'usbhsm status' shows secure boot: false (not enforced yet)."
+    echo "boots and 'picosignet status' shows secure boot: false (not enforced yet)."
     echo "Nothing is burned in this stage."
     ;;
 P4)
     echo "P4 is the POINT OF NO RETURN. After this burn:"
-    echo "  - only images signed with keys/usbhsm-boot.pem will boot"
+    echo "  - only images signed with keys/picosignet-boot.pem will boot"
     echo "  - losing that key means the device can never be updated again"
     echo "Do NOT proceed unless P1-P3 passed and the key is backed up offline."
     gate P4 "enable secure boot (CRIT1.SECURE_BOOT_ENABLE)"
     picotool otp set CRIT1.SECURE_BOOT_ENABLE 1
     echo "P4 done. Verify NOW:"
     echo "  1. power-cycle: the signed image must boot"
-    echo "  2. 'usbhsm status' must show secure boot: true"
+    echo "  2. 'picosignet status' must show secure boot: true"
     echo "  3. NEGATIVE TEST: an unsigned UF2 must be refused by the bootrom"
     ;;
 P5)
