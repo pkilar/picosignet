@@ -16,7 +16,3 @@ require (
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 )
-
-// Local development against the sibling cerberus checkout. Production builds
-// drop this and use the pinned module version above.
-replace github.com/pkilar/cerberus => ../../cerberus
