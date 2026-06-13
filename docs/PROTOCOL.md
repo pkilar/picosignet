@@ -148,17 +148,7 @@ GPIO16, no power-enable pin) shows the device state at a glance:
 
 ## State machine
 
-```
-Uninitialized ──init(dev)──▶ DevReady ──generateKey──▶ DevReady
-     │                                                   ▲ │  lock/USB-reset → DevReady
-     └──init(prod,pin)──▶ ProdLocked ──unlock(ok)──▶ ProdReady
-                            │  ▲   └──unlock(bad)──┐       │
-                            │  └──────────────────┘        │ lock / USB reset / suspend
-                            ▼ (retry budget exhausted)     ▼
-                         LockedOut ◀──────────────── (back to ProdLocked)
-                            │
-                            └──factoryReset──▶ Uninitialized
-```
+![PicoSignet device state machine](state-machine.svg)
 
 Always allowed (any state): `ping`, `getEnclaveMetrics`, `status`, `setTime`,
 `selfTest`, `addEntropy`. `getPublicKey` works whenever a key is present (the
