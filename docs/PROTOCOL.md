@@ -155,6 +155,25 @@ Always allowed (any state): `ping`, `getEnclaveMetrics`, `status`, `setTime`,
 public key is stored in the clear). `signSshKey`/`loadKeySigner` succeed only in
 `DevReady`/`ProdReady` with a key and a set clock.
 
+## Wire-contract provenance
+
+The signer-path contract is mirrored field-for-field from the cerberus source —
+re-check these if cerberus ever changes the wire format:
+
+- `messages/messages.go` — request/response wire types.
+- `ssh-cert-signer/internal/handlers/sign-public-key.go` — validation order,
+  exact error strings, certificate population.
+- `ssh-cert-signer/cmd/ssh-cert-signer/main.go` — framing (one JSON object +
+  `\n` per message), 256 KiB max request, 32 connections, 5 s deadlines,
+  top-level `{"error":…}` routing for all failures.
+- `ssh-cert-api/internal/enclave/client.go` — client dials VSOCK CID 16 /
+  port 5000 per request, 30 s deadline.
+- `constants/constants.go` — `EnclaveCID = 16`, `EnclaveListeningPort = 5000`.
+
+The differential suite (`tests/differential/`) is the living enforcement of this
+contract: every issued certificate is compared field-by-field against
+`golang.org/x/crypto/ssh`.
+
 ## Divergences from cerberus
 
 These are the only places the device's behavior differs from the enclave; none
