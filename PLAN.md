@@ -71,19 +71,19 @@ Key reuse: host Go module imports `github.com/pkilar/cerberus/messages` for sign
 
 Management errors return INSIDE the hsm response (`{"hsm":{"error":{"code":"ERR_*","message":"…",…}}}`); signer-path errors stay top-level. Codes: ERR_BAD_REQUEST, ERR_ALREADY_INIT, ERR_NOT_INIT, ERR_NO_KEY, ERR_KEY_EXISTS, ERR_LOCKED, ERR_BAD_PIN, ERR_LOCKED_OUT, ERR_CLOCK_UNSET, ERR_BAD_MODE, ERR_ENTROPY, ERR_FLASH, ERR_OVERSIZE, ERR_BUSY, ERR_INTERNAL.
 
-| Command | Request | Success response |
-|---|---|---|
-| init | `{"hsm":{"init":{"mode":"dev"}}}` / `{"hsm":{"init":{"mode":"prod","pin":"…","maxRetries":10,"wipeOnLockout":false}}}` (pin 6–64 bytes) | `{"hsm":{"init":{"ok":true,"mode":"prod"}}}` |
-| generateKey | `{"hsm":{"generateKey":{"force":false}}}` | `{"hsm":{"generateKey":{"ok":true,"publicKey":"ssh-ed25519 AAAA… picosignet-ca"}}}` |
-| getPublicKey | `{"hsm":{"getPublicKey":{}}}` | `{"hsm":{"getPublicKey":{"publicKey":"…"}}}` (works while ProdLocked — pubkey stored plaintext) |
-| unlock | `{"hsm":{"unlock":{"pin":"…"}}}` | `{"hsm":{"unlock":{"ok":true}}}`; fail → error with `remainingAttempts`, `backoffMs` |
-| lock | `{"hsm":{"lock":{}}}` | `{"hsm":{"lock":{"ok":true}}}` |
-| setTime | `{"hsm":{"setTime":{"unixSeconds":N}}}` | `{"hsm":{"setTime":{"ok":true,"uptimeMs":…,"previousSet":bool}}}` |
-| status | `{"hsm":{"status":{}}}` | state, mode, keyPresent, unlocked, clockSet, unixSeconds, uptimeMs, retryRemaining, fwVersion, serial, heapFreeBytes |
-| changePin | `{"hsm":{"changePin":{"currentPin":"…","newPin":"…"}}}` | `{"hsm":{"changePin":{"ok":true}}}` (counts as retry attempt) |
-| addEntropy | `{"hsm":{"addEntropy":{"hex":"…"}}}` (≤1024 B) | ok (hashed into pool, never sole source) |
-| selfTest | `{"hsm":{"selfTest":{}}}` | per-test pass/fail: ed25519Kat, sha2Kat, aeadKat, drbgHealth, flashCrc |
-| factoryReset | `{"hsm":{"factoryReset":{"confirm":"ERASE"}}}` | ok — erases key+config+counter → Uninitialized |
+| Command      | Request                                                                                                                                 | Success response                                                                                                     |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| init         | `{"hsm":{"init":{"mode":"dev"}}}` / `{"hsm":{"init":{"mode":"prod","pin":"…","maxRetries":10,"wipeOnLockout":false}}}` (pin 6–64 bytes) | `{"hsm":{"init":{"ok":true,"mode":"prod"}}}`                                                                         |
+| generateKey  | `{"hsm":{"generateKey":{"force":false}}}`                                                                                               | `{"hsm":{"generateKey":{"ok":true,"publicKey":"ssh-ed25519 AAAA… picosignet-ca"}}}`                                  |
+| getPublicKey | `{"hsm":{"getPublicKey":{}}}`                                                                                                           | `{"hsm":{"getPublicKey":{"publicKey":"…"}}}` (works while ProdLocked — pubkey stored plaintext)                      |
+| unlock       | `{"hsm":{"unlock":{"pin":"…"}}}`                                                                                                        | `{"hsm":{"unlock":{"ok":true}}}`; fail → error with `remainingAttempts`, `backoffMs`                                 |
+| lock         | `{"hsm":{"lock":{}}}`                                                                                                                   | `{"hsm":{"lock":{"ok":true}}}`                                                                                       |
+| setTime      | `{"hsm":{"setTime":{"unixSeconds":N}}}`                                                                                                 | `{"hsm":{"setTime":{"ok":true,"uptimeMs":…,"previousSet":bool}}}`                                                    |
+| status       | `{"hsm":{"status":{}}}`                                                                                                                 | state, mode, keyPresent, unlocked, clockSet, unixSeconds, uptimeMs, retryRemaining, fwVersion, serial, heapFreeBytes |
+| changePin    | `{"hsm":{"changePin":{"currentPin":"…","newPin":"…"}}}`                                                                                 | `{"hsm":{"changePin":{"ok":true}}}` (counts as retry attempt)                                                        |
+| addEntropy   | `{"hsm":{"addEntropy":{"hex":"…"}}}` (≤1024 B)                                                                                          | ok (hashed into pool, never sole source)                                                                             |
+| selfTest     | `{"hsm":{"selfTest":{}}}`                                                                                                               | per-test pass/fail: ed25519Kat, sha2Kat, aeadKat, drbgHealth, flashCrc                                               |
+| factoryReset | `{"hsm":{"factoryReset":{"confirm":"ERASE"}}}`                                                                                          | ok — erases key+config+counter → Uninitialized                                                                       |
 
 `signSshKey` with clock unset fails closed: top-level `{"error":"device clock not set; send hsm.setTime first"}`.
 
@@ -100,13 +100,13 @@ States: `Uninitialized`, `DevReady`, `ProdLocked`, `ProdReady`, `LockedOut`.
 
 ## Flash layout & key protection (2 MB flash, 4 KiB sectors)
 
-| Region | Offset | Size |
-|---|---|---|
-| Firmware (XIP) | 0x000000 | 0x1FA000 |
+| Region              | Offset              | Size       |
+| ------------------- | ------------------- | ---------- |
+| Firmware (XIP)      | 0x000000            | 0x1FA000   |
 | CONFIG_A / CONFIG_B | 0x1FA000 / 0x1FB000 | 4 KiB each |
-| KEY_A / KEY_B | 0x1FC000 / 0x1FD000 | 4 KiB each |
-| PIN_COUNTER | 0x1FE000 | 4 KiB |
-| RESERVED | 0x1FF000 | 4 KiB |
+| KEY_A / KEY_B       | 0x1FC000 / 0x1FD000 | 4 KiB each |
+| PIN_COUNTER         | 0x1FE000            | 4 KiB      |
+| RESERVED            | 0x1FF000            | 4 KiB      |
 
 - Record format: `magic "UHSM" u32 | version u16 | seq u32 | payload_len u16 | payload | crc32`. A/B: write lower-seq copy with seq=max+1; read highest-seq valid-CRC → power-fail safe.
 - DeviceConfig: mode, Argon2 params (m_cost u32 KiB, t_cost u32, p u8), salt[16], maxRetries, wipeOnLockout, fw version.

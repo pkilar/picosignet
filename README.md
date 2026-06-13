@@ -1,5 +1,7 @@
 # PicoSignet
 
+![PicoSignet overview](docs/picosignet.svg)
+
 An RP2350-based USB security key that acts as an SSH certificate-signing HSM,
 **drop-in wire-compatible** with the cerberus `ssh-cert-signer` (an AWS Nitro
 Enclave service). The Ed25519 CA private key is generated **on the device** and
@@ -33,12 +35,12 @@ SSH user certificates, signed by a CA whose private half is sealed in hardware.
 ## Architecture
 
 ```
-   ┌────────────────────────── workstation / server ──────────────────────────┐
-   │                                                                           │
+   ┌────────────────────────── workstation / server ─────────────────────────────────┐
+   │                                                                                 │
    │   ssh-cert-api ──vsock/tcp/unix──▶ picosignet bridge ──USB CDC-ACM──▶ device  │
-   │   (unmodified)    newline JSON      (Go, host/)     newline JSON  (RP2350) │
-   │                                                                           │
-   └───────────────────────────────────────────────────────────────────────────┘
+   │   (unmodified)    newline JSON      (Go, host/)     newline JSON  (RP2350)      │
+   │                                                                                 │
+   └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **`hsm-core`** — `no_std`+`alloc` Rust library holding *all* the logic: the
@@ -58,16 +60,16 @@ SSH user certificates, signed by a CA whose private half is sealed in hardware.
 
 ## Repository layout
 
-| Path | Purpose |
-|------|---------|
-| `hsm-core/` | core library (protocol, crypto, storage, state machine) |
-| `hsm-sim/` | stdin/stdout simulator |
-| `hsm-fw/` | RP2350 Embassy firmware |
-| `host/` | Go bridge + CLI (`PicoSignet`) |
-| `tests/differential/` | Go suite: HSM certs round-tripped through `x/crypto/ssh` |
-| `tests/golden/` | deterministic golden-vector certs verified with `ssh-keygen -L` |
-| `tests/hil/` | hardware-in-the-loop end-to-end script |
-| `docs/` | `PROTOCOL.md`, `FLASH_LAYOUT.md`, `THREAT_MODEL.md`, `PROVISIONING.md` |
+| Path                  | Purpose                                                                |
+| --------------------- | ---------------------------------------------------------------------- |
+| `hsm-core/`           | core library (protocol, crypto, storage, state machine)                |
+| `hsm-sim/`            | stdin/stdout simulator                                                 |
+| `hsm-fw/`             | RP2350 Embassy firmware                                                |
+| `host/`               | Go bridge + CLI (`PicoSignet`)                                         |
+| `tests/differential/` | Go suite: HSM certs round-tripped through `x/crypto/ssh`               |
+| `tests/golden/`       | deterministic golden-vector certs verified with `ssh-keygen -L`        |
+| `tests/hil/`          | hardware-in-the-loop end-to-end script                                 |
+| `docs/`               | `PROTOCOL.md`, `FLASH_LAYOUT.md`, `THREAT_MODEL.md`, `PROVISIONING.md` |
 
 ## Build & test
 
