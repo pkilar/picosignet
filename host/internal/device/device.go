@@ -45,6 +45,11 @@ type Serial struct {
 	port    serial.Port
 	r       *bufio.Reader
 	timeout time.Duration
+	path    string
+	// poisoned is set after any failed exchange: the device may still emit a
+	// late response, so the link must be reopened before the next request to
+	// avoid delivering a stale response to the wrong caller.
+	poisoned bool
 }
 
 // Discover finds the device's serial path: first via the stable
@@ -93,6 +98,7 @@ func Open(path string, timeout time.Duration) (*Serial, error) {
 		port:    port,
 		r:       bufio.NewReaderSize(timeoutReader{port}, 4096),
 		timeout: timeout,
+		path:    path,
 	}, nil
 }
 
@@ -100,6 +106,16 @@ func Open(path string, timeout time.Duration) (*Serial, error) {
 func (s *Serial) RoundTrip(ctx context.Context, req []byte) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// A previous exchange failed mid-flight (e.g. a read timeout). The device
+	// may still emit that response later, so reopen the port — discarding any
+	// buffered or in-flight bytes — before issuing a new request. Otherwise a
+	// stale response could be returned to the wrong caller.
+	if s.poisoned {
+		if err := s.reconnect(); err != nil {
+			return nil, fmt.Errorf("recovering serial link: %w", err)
+		}
+	}
 
 	if d, ok := ctx.Deadline(); ok {
 		// Honor a tighter caller deadline by adjusting the port read timeout.
@@ -111,16 +127,41 @@ func (s *Serial) RoundTrip(ctx context.Context, req []byte) ([]byte, error) {
 
 	line := append(append([]byte(nil), req...), '\n')
 	if _, err := s.port.Write(line); err != nil {
+		s.poisoned = true
 		return nil, fmt.Errorf("writing request: %w", err)
 	}
 	resp, err := s.r.ReadBytes('\n')
 	if err != nil {
+		// Any read failure (timeout included) leaves framing desynchronized.
+		s.poisoned = true
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
 	if len(resp) > maxLine {
+		// Oversize/garbled framing — treat the link as untrustworthy.
+		s.poisoned = true
 		return nil, errors.New("response exceeds maximum line length")
 	}
 	return resp[:len(resp)-1], nil // strip trailing newline
+}
+
+// reconnect closes and reopens the serial port, dropping any buffered or
+// in-flight bytes and clearing the poisoned flag. The caller must hold s.mu.
+func (s *Serial) reconnect() error {
+	if s.port != nil {
+		_ = s.port.Close()
+	}
+	port, err := serial.Open(s.path, &serial.Mode{BaudRate: 115200})
+	if err != nil {
+		return fmt.Errorf("reopening %s: %w", s.path, err)
+	}
+	if err := port.SetReadTimeout(s.timeout); err != nil {
+		_ = port.Close()
+		return fmt.Errorf("setting read timeout: %w", err)
+	}
+	s.port = port
+	s.r = bufio.NewReaderSize(timeoutReader{port}, 4096)
+	s.poisoned = false
+	return nil
 }
 
 // Close closes the underlying port.

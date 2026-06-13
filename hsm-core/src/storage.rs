@@ -17,8 +17,11 @@ use crate::hal::{FlashStore, HalError, Region, PAGE_LEN, SECTOR_LEN};
 
 /// Record magic: ASCII "UHSM".
 const MAGIC: [u8; 4] = *b"UHSM";
-/// Record schema version.
-const VERSION: u16 = 1;
+/// Record schema version. v2 moved the Argon2 salt out of [`DeviceConfig`] and
+/// into [`KeyBlob`] so the wrapped seed and the salt that derives its KEK commit
+/// as a single atomic record (a v1 split could strand the key on a torn write
+/// during PIN rotation). v1 records are rejected by the version check.
+const VERSION: u16 = 2;
 /// Header bytes preceding the payload: magic(4) + version(2) + seq(4) + len(2).
 const HEADER: usize = 12;
 
@@ -177,7 +180,6 @@ pub struct Argon2Params {
 pub struct DeviceConfig {
     pub mode: Mode,
     pub argon2: Argon2Params,
-    pub salt: [u8; 16],
     pub max_retries: u8,
     pub wipe_on_lockout: bool,
     pub fw_version: [u8; 3],
@@ -185,7 +187,7 @@ pub struct DeviceConfig {
 
 impl DeviceConfig {
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(32);
+        let mut v = Vec::with_capacity(16);
         v.push(match self.mode {
             Mode::Dev => 0,
             Mode::Prod => 1,
@@ -193,7 +195,6 @@ impl DeviceConfig {
         v.extend_from_slice(&self.argon2.m_cost.to_be_bytes());
         v.extend_from_slice(&self.argon2.t_cost.to_be_bytes());
         v.push(self.argon2.parallelism);
-        v.extend_from_slice(&self.salt);
         v.push(self.max_retries);
         v.push(self.wipe_on_lockout as u8);
         v.extend_from_slice(&self.fw_version);
@@ -201,8 +202,8 @@ impl DeviceConfig {
     }
 
     pub fn from_bytes(b: &[u8]) -> Option<DeviceConfig> {
-        // 1 + 4 + 4 + 1 + 16 + 1 + 1 + 3 = 31
-        if b.len() < 31 {
+        // 1 + 4 + 4 + 1 + 1 + 1 + 3 = 15 (the Argon2 salt now lives in KeyBlob)
+        if b.len() < 15 {
             return None;
         }
         let mode = match b[0] {
@@ -213,11 +214,9 @@ impl DeviceConfig {
         let m_cost = u32::from_be_bytes([b[1], b[2], b[3], b[4]]);
         let t_cost = u32::from_be_bytes([b[5], b[6], b[7], b[8]]);
         let parallelism = b[9];
-        let mut salt = [0u8; 16];
-        salt.copy_from_slice(&b[10..26]);
-        let max_retries = b[26];
-        let wipe_on_lockout = b[27] != 0;
-        let fw_version = [b[28], b[29], b[30]];
+        let max_retries = b[10];
+        let wipe_on_lockout = b[11] != 0;
+        let fw_version = [b[12], b[13], b[14]];
         Some(DeviceConfig {
             mode,
             argon2: Argon2Params {
@@ -225,7 +224,6 @@ impl DeviceConfig {
                 t_cost,
                 parallelism,
             },
-            salt,
             max_retries,
             wipe_on_lockout,
             fw_version,
@@ -246,7 +244,11 @@ pub enum WrapType {
 }
 
 /// The wrapped CA key record (`KEY_A`/`KEY_B` payload). The public key is stored
-/// in the clear so `getPublicKey` works while the device is locked.
+/// in the clear so `getPublicKey` works while the device is locked. The Argon2
+/// `salt` is stored here (not in [`DeviceConfig`]) so the wrapped seed and the
+/// salt that derives its KEK form one atomic record — a PIN rotation rewrites a
+/// single KEY record and can never leave the seed wrapped under a salt that the
+/// active config no longer matches. (`salt` is unused/zero for dev-mode wraps.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyBlob {
     pub wrap_type: WrapType,
@@ -254,21 +256,23 @@ pub struct KeyBlob {
     pub pubkey: [u8; 32],
     pub ciphertext: [u8; 32],
     pub tag: [u8; 16],
+    pub salt: [u8; 16],
 }
 
 impl KeyBlob {
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(1 + 12 + 32 + 32 + 16);
+        let mut v = Vec::with_capacity(1 + 12 + 32 + 32 + 16 + 16);
         v.push(self.wrap_type as u8);
         v.extend_from_slice(&self.aead_nonce);
         v.extend_from_slice(&self.pubkey);
         v.extend_from_slice(&self.ciphertext);
         v.extend_from_slice(&self.tag);
+        v.extend_from_slice(&self.salt);
         v
     }
 
     pub fn from_bytes(b: &[u8]) -> Option<KeyBlob> {
-        if b.len() < 93 {
+        if b.len() < 109 {
             return None;
         }
         let wrap_type = match b[0] {
@@ -284,12 +288,15 @@ impl KeyBlob {
         ciphertext.copy_from_slice(&b[45..77]);
         let mut tag = [0u8; 16];
         tag.copy_from_slice(&b[77..93]);
+        let mut salt = [0u8; 16];
+        salt.copy_from_slice(&b[93..109]);
         Some(KeyBlob {
             wrap_type,
             aead_nonce,
             pubkey,
             ciphertext,
             tag,
+            salt,
         })
     }
 }
@@ -313,7 +320,6 @@ mod tests {
                 t_cost: 8,
                 parallelism: 1,
             },
-            salt: [0xAB; 16],
             max_retries: 10,
             wipe_on_lockout: true,
             fw_version: [0, 1, 0],
@@ -329,6 +335,7 @@ mod tests {
             pubkey: [2; 32],
             ciphertext: [3; 32],
             tag: [4; 16],
+            salt: [5; 16],
         };
         assert_eq!(KeyBlob::from_bytes(&kb.to_bytes()), Some(kb));
     }

@@ -32,7 +32,7 @@ vector table inside the first 4 KiB). Current firmware footprint is ≈190 KiB.
 A/B pairs give power-fail safety. Each record:
 
 ```
-magic "UHSM" (u32) | version (u16) | seq (u32) | payload_len (u16) | payload | crc32 (u32)
+magic "UHSM" (u32) | version (u16=2) | seq (u32) | payload_len (u16) | payload | crc32 (u32)
 ```
 
 - **Read**: parse both copies; pick the highest `seq` whose CRC validates. A torn
@@ -40,21 +40,29 @@ magic "UHSM" (u32) | version (u16) | seq (u32) | payload_len (u16) | payload | c
 - **Write**: `seq = max(existing)+1`, written to the *lower-seq* copy, so the most
   recent good record survives until the new write completes.
 - CRC-32 (ISO-HDLC) over everything preceding the CRC.
+- The schema `version` is **2**. v1 (which stored the Argon2 salt in the config
+  record) is rejected by the version check.
 
 ### DeviceConfig payload
 
 `mode (u8: 0=dev,1=prod) | argon2 m_cost (u32, KiB) | t_cost (u32) | parallelism
-(u8) | salt[16] | max_retries (u8) | wipe_on_lockout (u8) | fw_version[3]`.
+(u8) | max_retries (u8) | wipe_on_lockout (u8) | fw_version[3]`.
 
 ### KeyBlob payload
 
 `wrap_type (u8: 3=devKEK, 4=pinKEK) | aead_nonce[12] | pubkey[32] | ciphertext[32]
-| tag[16]`.
+| tag[16] | salt[16]`.
 
 - `pubkey` is stored **in the clear** so `getPublicKey` works while locked.
 - `ciphertext` is the 32-byte Ed25519 seed, AEAD-sealed with ChaCha20-Poly1305.
+- `salt` is the Argon2 salt that derives the prod KEK (zero for dev wraps). It
+  lives **in the key record, not the config**, so a PIN rotation rewrites a
+  single atomic record: the wrapped seed and the salt needed to unwrap it can
+  never be torn apart across a power loss (which previously could strand the CA
+  key under a salt the active config no longer held).
 - AEAD AAD = `wrap_type ‖ pubkey`, so a blob cannot be presented under a
-  different wrap type or paired with a different public key.
+  different wrap type or paired with a different public key. A tampered `salt`
+  simply yields the wrong KEK, so the tag check fails.
 - Wrap types 1/2 were the earlier v1 wraps without the OTP binding; the
   parser rejects them.
 

@@ -49,8 +49,9 @@ const PIN_MAX: usize = 64;
 const MAX_ENTROPY_HEX: usize = 1024;
 const CA_COMMENT: &str = "picosignet-ca";
 
-/// The CA seed and the wrapping KEK recovered by a successful PIN verification.
-type UnlockedSeed = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>);
+/// The CA seed, the wrapping KEK, and the Argon2 salt (from the key blob)
+/// recovered by a successful PIN verification.
+type UnlockedSeed = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>, [u8; 16]);
 
 // Management error codes (kept in lockstep with docs/PROTOCOL.md).
 const ERR_BAD_REQUEST: &str = "ERR_BAD_REQUEST";
@@ -83,6 +84,9 @@ pub struct Hsm<E: EntropySource, M: Monotonic, F: FlashStore> {
     /// The key-encryption key for wrapping *new* keys: the dev KEK in dev mode,
     /// or the Argon2id(PIN) KEK cached after a successful prod unlock.
     wrap_kek: Option<Zeroizing<[u8; 32]>>,
+    /// The Argon2 salt matching `wrap_kek` (prod only), so `generateKey` can
+    /// re-wrap a rotated seed into a self-consistent blob without the PIN.
+    wrap_salt: Option<[u8; 16]>,
     /// Firmware-reported free heap (0 when unknown, e.g. in the simulator).
     heap_free: u64,
     /// Firmware-reported security posture (all false in the simulator):
@@ -114,6 +118,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             ca: None,
             ca_pubkey: None,
             wrap_kek: None,
+            wrap_salt: None,
             heap_free: 0,
             glitch_armed: false,
             secure_boot: false,
@@ -181,6 +186,9 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             .flatten()
             .and_then(|b| KeyBlob::from_bytes(&b));
         self.ca_pubkey = keyblob.as_ref().map(|kb| kb.pubkey);
+        // The salt lives in the key blob (v2); a cached KEK is only meaningful
+        // alongside it. Both are re-established below per mode.
+        self.wrap_salt = None;
 
         match cfg {
             None => {
@@ -427,7 +435,6 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 let cfg = DeviceConfig {
                     mode: Mode::Dev,
                     argon2: DEFAULT_ARGON,
-                    salt: [0u8; 16],
                     max_retries: 0,
                     wipe_on_lockout: false,
                     fw_version: fw_version_triple(),
@@ -479,10 +486,11 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 };
                 let mut nonce = [0u8; 12];
                 self.drbg.fill_bytes(&mut nonce);
-                let blob = wrap_seed(&kek, &seed, &pubkey, WrapType::PinKek, &nonce);
+                let blob = wrap_seed(&kek, &seed, &pubkey, WrapType::PinKek, &salt, &nonce);
 
                 // Write the key first, then config: a config present on boot
-                // therefore always implies a key present.
+                // therefore always implies a key present. The salt rides inside
+                // the key blob, so the key record alone is self-unwrapping.
                 if storage::KEY
                     .write(&mut self.flash, &blob.to_bytes())
                     .is_err()
@@ -492,7 +500,6 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 let cfg = DeviceConfig {
                     mode: Mode::Prod,
                     argon2: DEFAULT_ARGON,
-                    salt,
                     max_retries,
                     wipe_on_lockout: wipe,
                     fw_version: fw_version_triple(),
@@ -539,11 +546,20 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 if self.prepare_keygen_entropy().is_err() {
                     return HsmResponse::err(ERR_ENTROPY, "entropy source unhealthy");
                 }
+                // The rotated blob must carry the salt that derived the cached
+                // KEK (prod); dev wraps use no salt.
+                let salt = match wrap_type {
+                    WrapType::DevKek => [0u8; 16],
+                    WrapType::PinKek => match self.wrap_salt {
+                        Some(s) => s,
+                        None => return HsmResponse::err(ERR_LOCKED, "unlock the device first"),
+                    },
+                };
                 let (seed, ca) = CaKey::generate(&mut self.drbg);
                 let pubkey = ca.public_bytes();
                 let mut nonce = [0u8; 12];
                 self.drbg.fill_bytes(&mut nonce);
-                let blob = wrap_seed(&kek, &seed, &pubkey, wrap_type, &nonce);
+                let blob = wrap_seed(&kek, &seed, &pubkey, wrap_type, &salt, &nonce);
                 if storage::KEY
                     .write(&mut self.flash, &blob.to_bytes())
                     .is_err()
@@ -586,9 +602,10 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 HsmResponse::with(|r| r.unlock = Some(UnlockResp { ok: true }))
             }
             DeviceState::ProdLocked => match self.verify_pin(&req.pin) {
-                Ok((seed, kek)) => {
+                Ok((seed, kek, salt)) => {
                     self.ca = Some(CaKey::from_seed(&seed));
                     self.wrap_kek = Some(kek);
+                    self.wrap_salt = Some(salt);
                     self.state = DeviceState::ProdReady;
                     HsmResponse::with(|r| r.unlock = Some(UnlockResp { ok: true }))
                 }
@@ -611,6 +628,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             DeviceState::ProdReady => {
                 self.ca = None; // CaKey zeroizes on drop
                 self.wrap_kek = None; // Zeroizing
+                self.wrap_salt = None;
                 self.state = DeviceState::ProdLocked;
                 HsmResponse::with(|r| r.lock = Some(OkResp { ok: true }))
             }
@@ -690,7 +708,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             );
         }
         let was_ready = self.state == DeviceState::ProdReady;
-        let (seed, _old_kek) = match self.verify_pin(&req.current_pin) {
+        let (seed, _old_kek, _old_salt) = match self.verify_pin(&req.current_pin) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -700,7 +718,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
         }
         let mut new_salt = [0u8; 16];
         self.drbg.fill_bytes(&mut new_salt);
-        let mut cfg = self.config.expect("prod implies config");
+        let cfg = self.config.expect("prod implies config");
         let secret = match self.flash.device_secret() {
             Ok(s) => s,
             Err(_) => return HsmResponse::err(ERR_INTERNAL, "device secret unavailable"),
@@ -715,29 +733,33 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
         };
         let mut nonce = [0u8; 12];
         self.drbg.fill_bytes(&mut nonce);
-        let blob = wrap_seed(&new_kek, &seed, &pubkey, WrapType::PinKek, &nonce);
+        // The new salt rides inside the key blob, so rotation is a single atomic
+        // KEY-record write: there is no separate config write that could tear
+        // and strand the seed under a salt the device can no longer reconstruct.
+        let blob = wrap_seed(
+            &new_kek,
+            &seed,
+            &pubkey,
+            WrapType::PinKek,
+            &new_salt,
+            &nonce,
+        );
         if storage::KEY
             .write(&mut self.flash, &blob.to_bytes())
             .is_err()
         {
             return HsmResponse::err(ERR_FLASH, "failed to write key");
         }
-        cfg.salt = new_salt;
-        if storage::CONFIG
-            .write(&mut self.flash, &cfg.to_bytes())
-            .is_err()
-        {
-            return HsmResponse::err(ERR_FLASH, "failed to write config");
-        }
-        self.config = Some(cfg);
         let _ = pin::reset(&mut self.flash);
         if was_ready {
             self.ca = Some(CaKey::from_seed(&seed));
             self.wrap_kek = Some(new_kek);
+            self.wrap_salt = Some(new_salt);
             self.state = DeviceState::ProdReady;
         } else {
             self.ca = None;
             self.wrap_kek = None;
+            self.wrap_salt = None;
             self.state = DeviceState::ProdLocked;
         }
         HsmResponse::with(|r| r.change_pin = Some(OkResp { ok: true }))
@@ -804,15 +826,31 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
         if req.confirm != "ERASE" {
             return HsmResponse::err(ERR_BAD_REQUEST, "confirm must be \"ERASE\"");
         }
-        let _ = storage::KEY.erase_both(&mut self.flash);
-        let _ = storage::CONFIG.erase_both(&mut self.flash);
-        let _ = pin::reset(&mut self.flash);
+        // Drop live secrets from RAM first, regardless of the flash outcome.
         self.ca = None;
         self.wrap_kek = None;
-        self.ca_pubkey = None;
-        self.config = None;
-        self.state = DeviceState::Uninitialized;
-        HsmResponse::with(|r| r.factory_reset = Some(OkResp { ok: true }))
+        self.wrap_salt = None;
+
+        // Erase every persistent region and verify the sensitive records are
+        // actually gone; do not claim success while key material may remain.
+        let key_gone = self.erase_key_verified();
+        let cfg_ok = storage::CONFIG.erase_both(&mut self.flash).is_ok();
+        let pin_ok = pin::reset(&mut self.flash).is_ok();
+        let cfg_gone = matches!(storage::CONFIG.read_latest(&mut self.flash), Ok(None));
+
+        if key_gone && cfg_ok && pin_ok && cfg_gone {
+            self.ca_pubkey = None;
+            self.config = None;
+            self.state = DeviceState::Uninitialized;
+            return HsmResponse::with(|r| r.factory_reset = Some(OkResp { ok: true }));
+        }
+        // A region failed to erase. Resync RAM from whatever persists so status
+        // reflects reality, then report failure so the operator retries.
+        self.load_from_flash();
+        HsmResponse::err(
+            ERR_FLASH,
+            "factory reset incomplete; key material may remain — retry",
+        )
     }
 
     // ---- helpers ----------------------------------------------------------
@@ -827,16 +865,9 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             Ok(a) => a,
             Err(_) => return Err(HsmResponse::err(ERR_FLASH, "counter write failed")),
         };
-        let secret = match self.flash.device_secret() {
-            Ok(s) => s,
-            Err(_) => {
-                return Err(HsmResponse::err(ERR_INTERNAL, "device secret unavailable"));
-            }
-        };
-        let kek = match pin_kek(pin_str.as_bytes(), &cfg.salt, &cfg.argon2, &secret) {
-            Ok(k) => k,
-            Err(_) => return Err(HsmResponse::err(ERR_INTERNAL, "key derivation failed")),
-        };
+        // Read the key blob first: the Argon2 salt that derives the KEK lives in
+        // the blob (v2), so we need it before deriving. The pre-tick above
+        // already counted this attempt, so doing flash reads here is safe.
         let blob = match storage::KEY.read_latest(&mut self.flash) {
             Ok(Some(b)) => match KeyBlob::from_bytes(&b) {
                 Some(kb) => kb,
@@ -845,21 +876,42 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             Ok(None) => return Err(HsmResponse::err(ERR_NO_KEY, "no CA key present")),
             Err(_) => return Err(HsmResponse::err(ERR_FLASH, "key read failed")),
         };
+        let secret = match self.flash.device_secret() {
+            Ok(s) => s,
+            Err(_) => {
+                return Err(HsmResponse::err(ERR_INTERNAL, "device secret unavailable"));
+            }
+        };
+        let kek = match pin_kek(pin_str.as_bytes(), &blob.salt, &cfg.argon2, &secret) {
+            Ok(k) => k,
+            Err(_) => return Err(HsmResponse::err(ERR_INTERNAL, "key derivation failed")),
+        };
         match unwrap_seed(&kek, &blob) {
             Ok(seed) => {
                 let _ = pin::reset(&mut self.flash);
-                Ok((seed, kek))
+                Ok((seed, kek, blob.salt))
             }
             Err(_) => {
                 let max = cfg.max_retries as u32;
                 let backoff = pin::backoff_ms(attempts.saturating_sub(1) as u32);
                 self.mono.delay_ms(backoff);
                 if attempts as u32 >= max {
-                    if cfg.wipe_on_lockout {
-                        let _ = storage::KEY.erase_both(&mut self.flash);
-                        self.ca_pubkey = None;
-                    }
                     self.state = DeviceState::LockedOut;
+                    if cfg.wipe_on_lockout {
+                        // Only claim the wipe once both key copies are verified
+                        // unreadable; otherwise surface a hard error rather than
+                        // pretending the CA key was destroyed.
+                        if self.erase_key_verified() {
+                            self.ca_pubkey = None;
+                        } else {
+                            return Err(pin_error(
+                                ERR_FLASH,
+                                "lockout reached but key wipe failed; key material may remain",
+                                0,
+                                backoff,
+                            ));
+                        }
+                    }
                     Err(pin_error(
                         ERR_LOCKED_OUT,
                         "too many attempts; device locked out",
@@ -872,6 +924,20 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 }
             }
         }
+    }
+
+    /// Erase both copies of the CA key record and confirm no valid record
+    /// remains, retrying once. Returns false if key material may still be
+    /// readable in flash, so callers can fail closed instead of claiming the
+    /// key was destroyed.
+    fn erase_key_verified(&mut self) -> bool {
+        for _ in 0..2 {
+            let _ = storage::KEY.erase_both(&mut self.flash);
+            if matches!(storage::KEY.read_latest(&mut self.flash), Ok(None)) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Ensure the DRBG has been seeded at least once (used on the signing hot
@@ -1308,5 +1374,100 @@ mod tests {
         let mut h2 = Hsm::boot(MockEntropy::new(2), MockClock::new(), other_chip);
         let s = call(&mut h2, r#"{"hsm":{"status":{}}}"#);
         assert_eq!(s["hsm"]["status"]["unlocked"], false);
+    }
+
+    #[test]
+    fn change_pin_writes_only_the_key_record_and_rotates_salt() {
+        // Regression: the Argon2 salt lives in the key blob, so PIN rotation is
+        // a single atomic KEY-record write — it must not touch the config
+        // record, and the new PIN must unwrap the seed after a reboot while the
+        // old PIN must not. (A split key/config write could otherwise strand
+        // the CA key on a torn write.)
+        let mut flash = MockFlash::new();
+        {
+            let mut h = Hsm::boot(MockEntropy::new(1), MockClock::new(), &mut flash);
+            call(
+                &mut h,
+                r#"{"hsm":{"init":{"mode":"prod","pin":"oldpassword"}}}"#,
+            );
+        }
+        let cfg_before = storage::CONFIG.read_latest(&mut flash).unwrap();
+        {
+            let mut h = Hsm::boot(MockEntropy::new(2), MockClock::new(), &mut flash);
+            assert_eq!(
+                call(&mut h, r#"{"hsm":{"unlock":{"pin":"oldpassword"}}}"#)["hsm"]["unlock"]["ok"],
+                true
+            );
+            assert_eq!(
+                call(
+                    &mut h,
+                    r#"{"hsm":{"changePin":{"currentPin":"oldpassword","newPin":"newpassword"}}}"#
+                )["hsm"]["changePin"]["ok"],
+                true
+            );
+        }
+        let cfg_after = storage::CONFIG.read_latest(&mut flash).unwrap();
+        assert_eq!(
+            cfg_before, cfg_after,
+            "change_pin must not rewrite the config record"
+        );
+        // Old PIN rejected, new PIN unlocks — the rotated salt persisted with the key.
+        {
+            let mut h = Hsm::boot(MockEntropy::new(3), MockClock::new(), &mut flash);
+            assert_eq!(h.state(), DeviceState::ProdLocked);
+            let bad = call(&mut h, r#"{"hsm":{"unlock":{"pin":"oldpassword"}}}"#);
+            assert_eq!(bad["hsm"]["error"]["code"], "ERR_BAD_PIN");
+        }
+        {
+            let mut h = Hsm::boot(MockEntropy::new(4), MockClock::new(), &mut flash);
+            assert_eq!(
+                call(&mut h, r#"{"hsm":{"unlock":{"pin":"newpassword"}}}"#)["hsm"]["unlock"]["ok"],
+                true
+            );
+        }
+    }
+
+    #[test]
+    fn factory_reset_fails_closed_when_erase_fails() {
+        // A failed erase must not be reported as a successful reset.
+        let mut flash = MockFlash::new();
+        {
+            let mut h = Hsm::boot(MockEntropy::new(1), MockClock::new(), &mut flash);
+            call(
+                &mut h,
+                r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw"}}}"#,
+            );
+        }
+        flash.set_erase_fault(true);
+        let mut h = Hsm::boot(MockEntropy::new(2), MockClock::new(), &mut flash);
+        let r = call(&mut h, r#"{"hsm":{"factoryReset":{"confirm":"ERASE"}}}"#);
+        assert_eq!(r["hsm"]["error"]["code"], "ERR_FLASH");
+        // State must reflect reality: the key record is still present.
+        let s = call(&mut h, r#"{"hsm":{"status":{}}}"#);
+        assert_eq!(s["hsm"]["status"]["keyPresent"], true);
+        assert_eq!(s["hsm"]["status"]["state"], "prodLocked");
+    }
+
+    #[test]
+    fn lockout_wipe_fails_closed_when_erase_fails() {
+        // wipe-on-lockout must verify the erase; if the key cannot be destroyed,
+        // surface ERR_FLASH rather than claiming the key was wiped.
+        let mut flash = MockFlash::new();
+        {
+            let mut h = Hsm::boot(MockEntropy::new(1), MockClock::new(), &mut flash);
+            call(
+                &mut h,
+                r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw","maxRetries":1,"wipeOnLockout":true}}}"#,
+            );
+        }
+        flash.set_erase_fault(true);
+        let mut h = Hsm::boot(MockEntropy::new(2), MockClock::new(), &mut flash);
+        // First wrong attempt reaches maxRetries=1 → lockout → wipe → erase fails.
+        let r = call(&mut h, r#"{"hsm":{"unlock":{"pin":"wrongpwxx"}}}"#);
+        assert_eq!(r["hsm"]["error"]["code"], "ERR_FLASH");
+        // The key must still be reported present (the wipe did not happen).
+        let s = call(&mut h, r#"{"hsm":{"status":{}}}"#);
+        assert_eq!(s["hsm"]["status"]["keyPresent"], true);
+        assert_eq!(s["hsm"]["status"]["state"], "lockedOut");
     }
 }

@@ -84,11 +84,14 @@ fn aad(wrap_type: WrapType, pubkey: &[u8; 32]) -> [u8; 33] {
 
 /// Wrap `seed` under `kek`, producing a [`KeyBlob`]. `nonce` must be unique per
 /// (key, message) — the caller supplies a fresh random nonce from the DRBG.
+/// `salt` is the Argon2 salt that derived `kek` (zero for dev wraps); it is
+/// stored in the blob so the seed and its salt persist as one atomic record.
 pub fn wrap_seed(
     kek: &[u8; 32],
     seed: &[u8; 32],
     pubkey: &[u8; 32],
     wrap_type: WrapType,
+    salt: &[u8; 16],
     nonce: &[u8; 12],
 ) -> KeyBlob {
     let cipher = ChaCha20Poly1305::new(kek.into());
@@ -102,6 +105,7 @@ pub fn wrap_seed(
         pubkey: *pubkey,
         ciphertext: buf,
         tag: tag.into(),
+        salt: *salt,
     }
 }
 
@@ -140,7 +144,14 @@ mod tests {
         let kek = dev_kek(&SECRET);
         let seed = [9u8; 32];
         let pubkey = [7u8; 32];
-        let blob = wrap_seed(&kek, &seed, &pubkey, WrapType::DevKek, &[0u8; 12]);
+        let blob = wrap_seed(
+            &kek,
+            &seed,
+            &pubkey,
+            WrapType::DevKek,
+            &[0u8; 16],
+            &[0u8; 12],
+        );
         let got = unwrap_seed(&kek, &blob).unwrap();
         assert_eq!(*got, seed);
     }
@@ -150,7 +161,14 @@ mod tests {
         let kek = pin_kek(b"correct horse", &[0xAB; 16], &params(), &SECRET).unwrap();
         let seed = [5u8; 32];
         let pubkey = [3u8; 32];
-        let blob = wrap_seed(&kek, &seed, &pubkey, WrapType::PinKek, &[1u8; 12]);
+        let blob = wrap_seed(
+            &kek,
+            &seed,
+            &pubkey,
+            WrapType::PinKek,
+            &[0u8; 16],
+            &[1u8; 12],
+        );
         let got = unwrap_seed(&kek, &blob).unwrap();
         assert_eq!(*got, seed);
     }
@@ -159,7 +177,14 @@ mod tests {
     fn wrong_pin_fails_auth() {
         let salt = [0x11; 16];
         let kek = pin_kek(b"right-pin", &salt, &params(), &SECRET).unwrap();
-        let blob = wrap_seed(&kek, &[5u8; 32], &[3u8; 32], WrapType::PinKek, &[1u8; 12]);
+        let blob = wrap_seed(
+            &kek,
+            &[5u8; 32],
+            &[3u8; 32],
+            WrapType::PinKek,
+            &[0u8; 16],
+            &[1u8; 12],
+        );
         let wrong = pin_kek(b"wrong-pin", &salt, &params(), &SECRET).unwrap();
         assert_eq!(unwrap_seed(&wrong, &blob), Err(WrapError::Auth));
     }
@@ -170,12 +195,26 @@ mod tests {
         // off-chip) must not unwrap.
         let salt = [0x11; 16];
         let kek = pin_kek(b"right-pin", &salt, &params(), &SECRET).unwrap();
-        let blob = wrap_seed(&kek, &[5u8; 32], &[3u8; 32], WrapType::PinKek, &[1u8; 12]);
+        let blob = wrap_seed(
+            &kek,
+            &[5u8; 32],
+            &[3u8; 32],
+            WrapType::PinKek,
+            &[0u8; 16],
+            &[1u8; 12],
+        );
         let other = pin_kek(b"right-pin", &salt, &params(), &[0xA5; 32]).unwrap();
         assert_eq!(unwrap_seed(&other, &blob), Err(WrapError::Auth));
 
         let dev = dev_kek(&SECRET);
-        let dev_blob = wrap_seed(&dev, &[5u8; 32], &[3u8; 32], WrapType::DevKek, &[1u8; 12]);
+        let dev_blob = wrap_seed(
+            &dev,
+            &[5u8; 32],
+            &[3u8; 32],
+            WrapType::DevKek,
+            &[0u8; 16],
+            &[1u8; 12],
+        );
         let dev_other = dev_kek(&[0xA5; 32]);
         assert_eq!(unwrap_seed(&dev_other, &dev_blob), Err(WrapError::Auth));
     }
@@ -183,7 +222,14 @@ mod tests {
     #[test]
     fn tampered_ciphertext_fails_auth() {
         let kek = dev_kek(&SECRET);
-        let mut blob = wrap_seed(&kek, &[5u8; 32], &[3u8; 32], WrapType::DevKek, &[1u8; 12]);
+        let mut blob = wrap_seed(
+            &kek,
+            &[5u8; 32],
+            &[3u8; 32],
+            WrapType::DevKek,
+            &[0u8; 16],
+            &[1u8; 12],
+        );
         blob.ciphertext[0] ^= 0x01;
         assert_eq!(unwrap_seed(&kek, &blob), Err(WrapError::Auth));
     }
@@ -192,7 +238,14 @@ mod tests {
     fn swapped_wrap_type_fails_auth() {
         // AAD binds the wrap type; changing it must break authentication.
         let kek = dev_kek(&SECRET);
-        let mut blob = wrap_seed(&kek, &[5u8; 32], &[3u8; 32], WrapType::DevKek, &[1u8; 12]);
+        let mut blob = wrap_seed(
+            &kek,
+            &[5u8; 32],
+            &[3u8; 32],
+            WrapType::DevKek,
+            &[0u8; 16],
+            &[1u8; 12],
+        );
         blob.wrap_type = WrapType::PinKek;
         assert_eq!(unwrap_seed(&kek, &blob), Err(WrapError::Auth));
     }
