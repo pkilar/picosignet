@@ -16,20 +16,20 @@
 
   <!-- ===== transitions (drawn first, under nodes) ===== -->
   <!-- init(dev): Uninitialized -> DevReady -->
-  <path d="M255 232 L425 132" fill="none" stroke="#4f46e5" stroke-width="2.4" marker-end="url(#mi)"/>
-  <text x="318" y="170" fill="#4f46e5" font-size="12.5" font-weight="600" transform="rotate(-30 318 170)">init(dev)</text>
+  <path d="M270 240 L414 212" fill="none" stroke="#4f46e5" stroke-width="2.4" marker-end="url(#mi)"/>
+  <text x="342" y="214" text-anchor="middle" fill="#4f46e5" font-size="12.5" font-weight="600">init(dev)</text>
 
   <!-- init(prod,pin): Uninitialized -> ProdLocked -->
   <path d="M265 266 L420 296" fill="none" stroke="#4f46e5" stroke-width="2.4" marker-end="url(#mi)"/>
   <text x="300" y="270" fill="#4f46e5" font-size="12.5" font-weight="600">init(prod, pin)</text>
 
   <!-- DevReady self-loop: generateKey / reboot reloads -->
-  <path d="M495 78 C485 40, 555 40, 545 78" fill="none" stroke="#5b6478" stroke-width="2" marker-end="url(#ms)"/>
-  <text x="520" y="32" text-anchor="middle" fill="#5b6478" font-size="12">generateKey · reboot reloads key</text>
+  <path d="M495 174 C485 136, 555 136, 545 174" fill="none" stroke="#5b6478" stroke-width="2" marker-end="url(#ms)"/>
+  <text x="520" y="128" text-anchor="middle" fill="#5b6478" font-size="12">generateKey · reboot reloads key</text>
 
-  <!-- ProdLocked self-loop: unlock fail, retries remain -->
-  <path d="M495 268 C485 230, 555 230, 545 268" fill="none" stroke="#c08a2e" stroke-width="2" marker-end="url(#ma)"/>
-  <text x="520" y="222" text-anchor="middle" fill="#9a7b34" font-size="12">unlock ✗ — retries remain (backoff)</text>
+  <!-- ProdLocked self-loop: unlock fail, retries remain (left side, clear of DevReady) -->
+  <path d="M420 310 C384 302, 384 334, 420 328" fill="none" stroke="#c08a2e" stroke-width="2" marker-end="url(#ma)"/>
+  <text x="378" y="322" text-anchor="end" fill="#9a7b34" font-size="12">unlock ✗ — retries remain</text>
 
   <!-- ProdLocked -> ProdReady: unlock ok -->
   <path d="M620 292 L803 292" fill="none" stroke="#15924f" stroke-width="2.4" marker-end="url(#mg)"/>
@@ -58,11 +58,11 @@
   <text x="172" y="246" text-anchor="middle" fill="#16356e" font-size="16.5" font-weight="700">Uninitialized</text>
   <text x="172" y="266" text-anchor="middle" fill="#5b6478" font-size="12">no key · no config</text>
 
-  <!-- DevReady (green) center 520,110 -->
-  <g filter="url(#sh)"><rect x="420" y="78" width="200" height="64" rx="11" fill="#e6f4ec" stroke="#15924f" stroke-width="1.5"/></g>
-  <rect x="420" y="78" width="7" height="64" rx="3.5" fill="#15924f"/>
-  <text x="527" y="106" text-anchor="middle" fill="#0e5e33" font-size="16.5" font-weight="700">DevReady</text>
-  <text x="527" y="126" text-anchor="middle" fill="#5b6478" font-size="12">operational · key auto-loads</text>
+  <!-- DevReady (green) center 520,206 -->
+  <g filter="url(#sh)"><rect x="420" y="174" width="200" height="64" rx="11" fill="#e6f4ec" stroke="#15924f" stroke-width="1.5"/></g>
+  <rect x="420" y="174" width="7" height="64" rx="3.5" fill="#15924f"/>
+  <text x="527" y="202" text-anchor="middle" fill="#0e5e33" font-size="16.5" font-weight="700">DevReady</text>
+  <text x="527" y="222" text-anchor="middle" fill="#5b6478" font-size="12">operational · key auto-loads</text>
 
   <!-- ProdLocked (amber) center 520,300 -->
   <g filter="url(#sh)"><rect x="420" y="268" width="200" height="64" rx="11" fill="#fbf3df" stroke="#c08a2e" stroke-width="1.5"/></g>
