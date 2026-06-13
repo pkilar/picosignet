@@ -27,6 +27,7 @@ use hsm_core::hal::{EntropySource, HalError};
 use hsm_core::rng::Drbg;
 use rand_core::RngCore;
 use rp_pac::otp::vals::{SwLockNsec, SwLockSec};
+use zeroize::Zeroizing;
 
 /// OTP pages reserved for the secret, tried in order (primary, fallback).
 /// High pages, far away from the bootrom's own allocations in pages 0-2.
@@ -57,7 +58,7 @@ const fn base_row(page: usize) -> usize {
 
 enum SlotState {
     /// Slot holds a verified secret (already re-hard-locked if needed).
-    Valid([u8; 32]),
+    Valid(Zeroizing<[u8; 32]>),
     /// Slot is fully blank and may be provisioned.
     Blank,
     /// Slot is voided, dirty, or unreadable — skip it.
@@ -69,7 +70,9 @@ enum SlotState {
 /// Call once at boot, **before** [`lock_slots`]. Fails closed: any error path
 /// yields `HalError::Secret`/`Entropy` and the caller must surface an
 /// unusable-KEK state rather than continue with a degenerate secret.
-pub fn load_or_provision<E: EntropySource>(entropy: &mut E) -> Result<[u8; 32], HalError> {
+pub fn load_or_provision<E: EntropySource>(
+    entropy: &mut E,
+) -> Result<Zeroizing<[u8; 32]>, HalError> {
     for &page in &SLOT_PAGES {
         let secret = match try_load(page) {
             SlotState::Valid(secret) => secret,
@@ -126,7 +129,7 @@ fn try_load(page: usize) -> SlotState {
     }
 
     if marker == MARKER_VALID {
-        let mut secret = [0u8; 32];
+        let mut secret = Zeroizing::new([0u8; 32]);
         for i in 0..SECRET_ROWS {
             match otp::read_ecc_word(base + i) {
                 Ok(w) => {
@@ -169,12 +172,15 @@ fn try_load(page: usize) -> SlotState {
 
 /// Burn a fresh secret into `page`: rows write-and-verified one by one, the
 /// validity marker last, then the permanent page lock.
-fn provision<E: EntropySource>(page: usize, entropy: &mut E) -> Result<[u8; 32], HalError> {
+fn provision<E: EntropySource>(
+    page: usize,
+    entropy: &mut E,
+) -> Result<Zeroizing<[u8; 32]>, HalError> {
     // Health-checked, SHA-512-conditioned randomness — never raw TRNG output.
     let mut drbg = Drbg::new();
     drbg.seed(entropy)?;
-    let mut secret = [0u8; 32];
-    drbg.fill_bytes(&mut secret);
+    let mut secret = Zeroizing::new([0u8; 32]);
+    drbg.fill_bytes(&mut secret[..]);
     if degenerate(&secret) {
         return Err(HalError::Entropy);
     }

@@ -953,6 +953,7 @@ dependencies = [
  "rp-pac",
  "smart-leds",
  "static_cell",
+ "zeroize",
 ]
 
 [[package]]

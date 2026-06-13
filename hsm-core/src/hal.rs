@@ -7,6 +7,8 @@
 
 use core::fmt;
 
+use zeroize::Zeroizing;
+
 /// Errors a HAL implementation can surface. Kept coarse on purpose — the core
 /// maps these onto protocol error codes; fine-grained peripheral detail stays
 /// in the firmware logs.
@@ -108,7 +110,11 @@ pub trait FlashStore {
     /// QSPI flash alone can never unwrap the CA key. Returns
     /// [`HalError::Secret`] if unprovisioned/unreadable — callers must fail
     /// closed.
-    fn device_secret(&self) -> Result<[u8; 32], HalError>;
+    ///
+    /// Wrapped in [`Zeroizing`] so the root secret is scrubbed from the
+    /// caller's stack when it leaves scope, matching the handling of the KEKs
+    /// it derives — it must not outlive its use as an SRAM remnant.
+    fn device_secret(&self) -> Result<Zeroizing<[u8; 32]>, HalError>;
 }
 
 /// Convenience: the common sector size as a `usize` constant for buffer sizing
@@ -150,7 +156,7 @@ impl<T: FlashStore> FlashStore for &mut T {
     fn unique_id(&self) -> [u8; 8] {
         (**self).unique_id()
     }
-    fn device_secret(&self) -> Result<[u8; 32], HalError> {
+    fn device_secret(&self) -> Result<Zeroizing<[u8; 32]>, HalError> {
         (**self).device_secret()
     }
 }

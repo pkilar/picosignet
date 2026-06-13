@@ -9,6 +9,7 @@
 use embassy_rp::flash::{Blocking, Flash};
 use embassy_rp::peripherals::FLASH;
 use hsm_core::hal::{FlashStore, HalError, Region, SECTOR_LEN};
+use zeroize::Zeroizing;
 
 /// Total flash size on the Waveshare RP2350-One (4 MiB).
 const FLASH_SIZE: usize = 4 * 1024 * 1024;
@@ -29,13 +30,14 @@ pub struct EmbassyFlash<'d> {
     /// The OTP wrapping secret, loaded/provisioned at boot by
     /// `otp_secret::load_or_provision` (the OTP pages are SW_LOCKed by then,
     /// so this RAM copy is the only live access for the rest of the uptime).
-    device_secret: Result<[u8; 32], HalError>,
+    /// Held in [`Zeroizing`] so it is scrubbed if the store is ever dropped.
+    device_secret: Result<Zeroizing<[u8; 32]>, HalError>,
 }
 
 impl<'d> EmbassyFlash<'d> {
     /// Take the FLASH peripheral, read the chip id, and wrap it together with
     /// the boot-loaded OTP secret.
-    pub fn new(flash: FLASH, device_secret: Result<[u8; 32], HalError>) -> Self {
+    pub fn new(flash: FLASH, device_secret: Result<Zeroizing<[u8; 32]>, HalError>) -> Self {
         let flash = Flash::<_, Blocking, FLASH_SIZE>::new_blocking(flash);
         // RP2350: the device serial comes from the factory-programmed chip id
         // in OTP (rows 0x000-0x003) — on-die, unlike the RP2040's QSPI-flash
@@ -92,7 +94,7 @@ impl FlashStore for EmbassyFlash<'_> {
         self.unique_id
     }
 
-    fn device_secret(&self) -> Result<[u8; 32], HalError> {
-        self.device_secret
+    fn device_secret(&self) -> Result<Zeroizing<[u8; 32]>, HalError> {
+        self.device_secret.clone()
     }
 }

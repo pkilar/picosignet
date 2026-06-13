@@ -4,6 +4,8 @@
 //! `std` feature for the simulator, and under `cfg(test)` for unit tests). The
 //! firmware never includes it.
 
+use zeroize::Zeroizing;
+
 use crate::hal::{EntropySource, FlashStore, HalError, Monotonic, Region, SECTOR_LEN};
 
 /// A RAM-backed flash with the five HSM regions. Models NOR semantics loosely:
@@ -167,8 +169,8 @@ impl FlashStore for MockFlash {
         self.unique_id
     }
 
-    fn device_secret(&self) -> Result<[u8; 32], HalError> {
-        self.device_secret
+    fn device_secret(&self) -> Result<Zeroizing<[u8; 32]>, HalError> {
+        self.device_secret.map(Zeroizing::new)
     }
 }
 
