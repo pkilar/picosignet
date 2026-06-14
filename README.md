@@ -1,5 +1,11 @@
 # PicoSignet
 
+[![CI](https://github.com/pkilar/picosignet/actions/workflows/ci.yml/badge.svg)](https://github.com/pkilar/picosignet/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/pkilar/picosignet/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/pkilar/picosignet/security/code-scanning)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+![Platform: RP2350](https://img.shields.io/badge/platform-RP2350-8a2be2)
+![Rust](https://img.shields.io/badge/rust-stable-f74c00?logo=rust&logoColor=white)
+
 ![PicoSignet overview](docs/picosignet.svg)
 
 An RP2350-based USB security key that acts as an SSH certificate-signing HSM,
