@@ -74,8 +74,10 @@ flash: build-fw       ## flash an attached probe via probe-rs
 # ---- Go host --------------------------------------------------------------
 
 .PHONY: go-build
-go-build:
-	cd host && go build ./...
+go-build:             ## build the picosignet CLI to target/picosignet
+	mkdir -p target
+	cd host && go build -o ../target/picosignet ./cmd/picosignet
+	@echo "built target/picosignet"
 
 .PHONY: install
 install:              ## install the PicoSignet CLI to $(GOPATH)/bin (on PATH)
