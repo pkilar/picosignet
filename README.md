@@ -68,7 +68,7 @@ SSH user certificates, signed by a CA whose private half is sealed in hardware.
 | `tests/differential/` | Go suite: HSM certs round-tripped through `x/crypto/ssh`               |
 | `tests/golden/`       | deterministic golden-vector certs verified with `ssh-keygen -L`        |
 | `tests/hil/`          | hardware-in-the-loop end-to-end script                                 |
-| `docs/`               | `PROTOCOL.md`, `FLASH_LAYOUT.md`, `THREAT_MODEL.md`, `PROVISIONING.md` |
+| `docs/`               | [`PROTOCOL.md`](docs/PROTOCOL.md), [`FLASH_LAYOUT.md`](docs/FLASH_LAYOUT.md), [`THREAT_MODEL.md`](docs/THREAT_MODEL.md), [`PROVISIONING.md`](docs/PROVISIONING.md) |
 
 ## Build & test
 
@@ -110,9 +110,10 @@ picosignet self-test
 ```
 
 For production mode (`picosignet init --prod`), the secure-boot lockdown runbook,
-and deployment details, see `docs/PROVISIONING.md`. For what the RP2350
-security hardware does and does not buy (OTP-bound keys, glitch detectors,
-signed boot — and the honest residual risks), see `docs/THREAT_MODEL.md`.
+and deployment details, see [`docs/PROVISIONING.md`](docs/PROVISIONING.md). For
+what the RP2350 security hardware does and does not buy (OTP-bound keys, glitch
+detectors, signed boot — and the honest residual risks), see
+[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
 
 ## Compatibility
 
@@ -121,8 +122,8 @@ The signer-path protocol (`signSshKey`, `ping`, `loadKeySigner`,
 adds an `hsm` management envelope for provisioning; Go's `encoding/json` ignores
 it on the signer side, so the variant is additive and safe. The differential
 suite proves every issued certificate is byte-identical to one
-`golang.org/x/crypto/ssh` would marshal. See `docs/PROTOCOL.md` for the full
-wire spec and the handful of documented divergences.
+`golang.org/x/crypto/ssh` would marshal. See [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
+for the full wire spec and the handful of documented divergences.
 
 ## License
 
