@@ -59,13 +59,23 @@ keygen:               ## one-time secp256k1 boot-signing key (NEVER commit; back
 .PHONY: uf2-signed
 uf2-signed: build-fw  ## signed+sealed UF2 + boot-key OTP JSON (production)
 	@test -f $(BOOT_KEY) || { echo "no $(BOOT_KEY); run 'make keygen' first"; exit 1; }
-	picotool seal --sign $(FW_BIN) $(FW_BIN)-signed.uf2 $(BOOT_KEY) $(BOOT_OTP)
-	@echo "Signed UF2: $(FW_BIN)-signed.uf2"
+	# picotool seal must write the same file type it reads, so sign ELF->ELF
+	# (embeds the secp256k1 signature in the IMAGE_DEF block + writes BOOTKEY0
+	# to the OTP JSON), then repackage the signed image as a UF2 for BOOTSEL.
+	picotool seal --sign $(FW_BIN) -t elf $(FW_BIN)-signed.elf $(BOOT_KEY) $(BOOT_OTP)
+	picotool uf2 convert -t elf $(FW_BIN)-signed.elf $(FW_BIN)-signed.uf2 --family rp2350-arm-s
+	@echo "Signed ELF: $(FW_BIN)-signed.elf  (probe-rs / picotool load)"
+	@echo "Signed UF2: $(FW_BIN)-signed.uf2  (BOOTSEL flashing)"
 	@echo "Boot-key OTP JSON: $(BOOT_OTP) (consumed by scripts/provision_production.sh)"
 
 .PHONY: flash-uf2
-flash-uf2: uf2        ## flash over picoboot (device in BOOTSEL)
+flash-uf2: uf2        ## flash UNSIGNED image (dev only; will NOT boot once secure boot is burned)
 	picotool load -u -v -x $(FW_BIN).uf2
+
+.PHONY: flash-uf2-signed
+flash-uf2-signed: uf2-signed  ## flash the SIGNED image over picoboot (required after secure boot / P4)
+	picotool load -u -v -x $(FW_BIN)-signed.uf2
+	@echo "Flashed signed image. Power-cycle; LED on + 'picosignet status' secureBoot:true."
 
 .PHONY: flash
 flash: build-fw       ## flash an attached probe via probe-rs
