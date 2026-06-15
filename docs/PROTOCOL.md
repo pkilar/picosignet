@@ -85,7 +85,7 @@ Error object: `{"code":"ERR_*","message":"…","remainingAttempts":N,"backoffMs"
 | ---------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | init (dev)       | `{"hsm":{"init":{"mode":"dev"}}}`                                                  | `{"hsm":{"init":{"ok":true,"mode":"dev"}}}`                                                                                      |
 | init (prod)      | `{"hsm":{"init":{"mode":"prod","pin":"…","maxRetries":10,"wipeOnLockout":false}}}` | `{"hsm":{"init":{"ok":true,"mode":"prod"}}}`                                                                                     |
-| generateKey      | `{"hsm":{"generateKey":{"force":false}}}`                                          | `{"hsm":{"generateKey":{"ok":true,"publicKey":"ssh-ed25519 AAAA… picosignet-ca"}}}`                                                  |
+| generateKey      | `{"hsm":{"generateKey":{"force":false}}}`                                          | `{"hsm":{"generateKey":{"ok":true,"publicKey":"ssh-ed25519 AAAA… picosignet-ca"}}}`                                              |
 | getPublicKey     | `{"hsm":{"getPublicKey":{}}}`                                                      | `{"hsm":{"getPublicKey":{"publicKey":"…"}}}`                                                                                     |
 | unlock           | `{"hsm":{"unlock":{"pin":"…"}}}`                                                   | `{"hsm":{"unlock":{"ok":true}}}`                                                                                                 |
 | lock             | `{"hsm":{"lock":{}}}`                                                              | `{"hsm":{"lock":{"ok":true}}}`                                                                                                   |
@@ -138,12 +138,12 @@ armed), `secureBoot` (bootrom signed-boot enforcement burned), `glitchReset`
 The on-board WS2812 (the firmware targets the Waveshare RP2350-One: data
 GPIO16, no power-enable pin) shows the device state at a glance:
 
-| State                | Color                                                                         |
-| -------------------- | ----------------------------------------------------------------------------- |
-| Uninitialized        | blue                                                                          |
-| DevReady / ProdReady | green                                                                         |
-| ProdLocked           | amber                                                                         |
-| LockedOut            | red                                                                           |
+| State                | Color                                                                               |
+| -------------------- | ----------------------------------------------------------------------------------- |
+| Uninitialized        | blue                                                                                |
+| DevReady / ProdReady | green                                                                               |
+| ProdLocked           | amber                                                                               |
+| LockedOut            | red                                                                                 |
 | processing a request | white (held for the duration — a slow Argon2id unlock visibly holds white for ~1 s) |
 
 ## State machine

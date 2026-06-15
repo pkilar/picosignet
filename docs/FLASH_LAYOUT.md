@@ -13,15 +13,15 @@ region, a hard ceiling protecting the key.
 
 ## QSPI flash (4 MiB)
 
-| Region         | Offset     | Size      | Contents                                  |
-| -------------- | ---------- | --------- | ----------------------------------------- |
+| Region         | Offset     | Size      | Contents                                                         |
+| -------------- | ---------- | --------- | ---------------------------------------------------------------- |
 | Firmware (XIP) | `0x000000` | ~3.98 MiB | vector table, IMAGE_DEF block, code + rodata; ends at `0x3FA000` |
-| CONFIG_A       | `0x3FA000` | 4 KiB     | device config record                      |
-| CONFIG_B       | `0x3FB000` | 4 KiB     | redundant config copy                     |
-| KEY_A          | `0x3FC000` | 4 KiB     | wrapped CA key record                     |
-| KEY_B          | `0x3FD000` | 4 KiB     | redundant key copy                        |
-| PIN_COUNTER    | `0x3FE000` | 4 KiB     | PIN attempt tick log                      |
-| RESERVED       | `0x3FF000` | 4 KiB     | future (audit log)                        |
+| CONFIG_A       | `0x3FA000` | 4 KiB     | device config record                                             |
+| CONFIG_B       | `0x3FB000` | 4 KiB     | redundant config copy                                            |
+| KEY_A          | `0x3FC000` | 4 KiB     | wrapped CA key record                                            |
+| KEY_B          | `0x3FD000` | 4 KiB     | redundant key copy                                               |
+| PIN_COUNTER    | `0x3FE000` | 4 KiB     | PIN attempt tick log                                             |
+| RESERVED       | `0x3FF000` | 4 KiB     | future (audit log)                                               |
 
 There is no BOOT2 second-stage bootloader: the RP2350 bootrom boots directly
 from the `IMAGE_DEF` metadata block (`.start_block`, placed right after the
@@ -68,15 +68,15 @@ magic "UHSM" (u32) | version (u16=2) | seq (u32) | payload_len (u16) | payload |
 
 ## OTP allocation (on-die, 64 pages × 64 ECC rows × 16 data bits)
 
-| Rows (ECC space) | Page | Name | Written by |
-| --- | --- | --- | --- |
-| `0x000–0x003` | 0 | CHIPID (factory) — feeds `unique_id()` / the `serial` field | factory |
-| `0x040` | 1 | CRIT1: `SECURE_BOOT_ENABLE` bit0, `DEBUG_DISABLE` bit2, `GLITCH_DETECTOR_ENABLE` bit4, `GLITCH_DETECTOR_SENS` bits5–6 (raw, 8× redundant) | picotool, production runbook |
-| `0x048` / `0x04B` | 1 | BOOT_FLAGS0 (`DISABLE_BOOTSEL_USB_PICOBOOT_IFC`) / BOOT_FLAGS1 (`KEY_VALID`) | picotool, production runbook |
-| `0x080–0x08F` | 2 | BOOTKEY0 = SHA-256 of the secp256k1 boot public key | picotool via the seal-generated OTP JSON |
-| `0xF00–0xF11` | 60 | **device secret, slot B (fallback)**: rows 0–15 secret (32 B), row 16 marker `0xA5C3`, row 17 void `0xDEAD` | firmware, first boot |
-| `0xF40–0xF51` | 61 | **device secret, slot A (primary)**: same layout | firmware, first boot |
-| `0xFF9` / `0xFFB` | 63 | PAGE60_LOCK1 / PAGE61_LOCK1 = `0x3D3D3D` | firmware, right after a verified provision |
+| Rows (ECC space)  | Page | Name                                                                                                                                      | Written by                                 |
+| ----------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `0x000–0x003`     | 0    | CHIPID (factory) — feeds `unique_id()` / the `serial` field                                                                               | factory                                    |
+| `0x040`           | 1    | CRIT1: `SECURE_BOOT_ENABLE` bit0, `DEBUG_DISABLE` bit2, `GLITCH_DETECTOR_ENABLE` bit4, `GLITCH_DETECTOR_SENS` bits5–6 (raw, 8× redundant) | picotool, production runbook               |
+| `0x048` / `0x04B` | 1    | BOOT_FLAGS0 (`DISABLE_BOOTSEL_USB_PICOBOOT_IFC`) / BOOT_FLAGS1 (`KEY_VALID`)                                                              | picotool, production runbook               |
+| `0x080–0x08F`     | 2    | BOOTKEY0 = SHA-256 of the secp256k1 boot public key                                                                                       | picotool via the seal-generated OTP JSON   |
+| `0xF00–0xF11`     | 60   | **device secret, slot B (fallback)**: rows 0–15 secret (32 B), row 16 marker `0xA5C3`, row 17 void `0xDEAD`                               | firmware, first boot                       |
+| `0xF40–0xF51`     | 61   | **device secret, slot A (primary)**: same layout                                                                                          | firmware, first boot                       |
+| `0xFF9` / `0xFFB` | 63   | PAGE60_LOCK1 / PAGE61_LOCK1 = `0x3D3D3D`                                                                                                  | firmware, right after a verified provision |
 
 ### Device-secret lifecycle (`hsm-fw/src/otp_secret.rs`)
 

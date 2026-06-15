@@ -204,13 +204,13 @@ certificate is byte-identical to one the enclave would have produced (proven by
 The WS2812 on GPIO16 mirrors the device state machine, so the current state is
 visible at a glance:
 
-| LED | State |
-|---|---|
-| 🔵 blue | Uninitialized — freshly flashed; run `init` |
+| LED     | State                                                                                        |
+| ------- | -------------------------------------------------------------------------------------------- |
+| 🔵 blue  | Uninitialized — freshly flashed; run `init`                                                  |
 | ⚪ white | Busy — held while a request is handled (a prod Argon2id `unlock` visibly holds white ≈1.4 s) |
-| 🟢 green | DevReady / ProdReady — initialized and unlocked, ready to sign |
-| 🟠 amber | ProdLocked — production device; run `unlock` with the PIN |
-| 🔴 red | LockedOut — too many failed PIN attempts |
+| 🟢 green | DevReady / ProdReady — initialized and unlocked, ready to sign                               |
+| 🟠 amber | ProdLocked — production device; run `unlock` with the PIN                                    |
+| 🔴 red   | LockedOut — too many failed PIN attempts                                                     |
 
 **Off (no color)** means the application is not running — the board is in
 BOOTSEL, or, after secure-boot lockdown (1c), the bootrom is refusing an

@@ -59,15 +59,15 @@ SSH user certificates, signed by a CA whose private half is sealed in hardware.
 
 ## Repository layout
 
-| Path                  | Purpose                                                                |
-| --------------------- | ---------------------------------------------------------------------- |
-| `hsm-core/`           | core library (protocol, crypto, storage, state machine)                |
-| `hsm-sim/`            | stdin/stdout simulator                                                 |
-| `hsm-fw/`             | RP2350 Embassy firmware                                                |
-| `host/`               | Go bridge + CLI (`PicoSignet`)                                         |
-| `tests/differential/` | Go suite: HSM certs round-tripped through `x/crypto/ssh`               |
-| `tests/golden/`       | deterministic golden-vector certs verified with `ssh-keygen -L`        |
-| `tests/hil/`          | hardware-in-the-loop end-to-end script                                 |
+| Path                  | Purpose                                                                                                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `hsm-core/`           | core library (protocol, crypto, storage, state machine)                                                                                                            |
+| `hsm-sim/`            | stdin/stdout simulator                                                                                                                                             |
+| `hsm-fw/`             | RP2350 Embassy firmware                                                                                                                                            |
+| `host/`               | Go bridge + CLI (`PicoSignet`)                                                                                                                                     |
+| `tests/differential/` | Go suite: HSM certs round-tripped through `x/crypto/ssh`                                                                                                           |
+| `tests/golden/`       | deterministic golden-vector certs verified with `ssh-keygen -L`                                                                                                    |
+| `tests/hil/`          | hardware-in-the-loop end-to-end script                                                                                                                             |
 | `docs/`               | [`PROTOCOL.md`](docs/PROTOCOL.md), [`FLASH_LAYOUT.md`](docs/FLASH_LAYOUT.md), [`THREAT_MODEL.md`](docs/THREAT_MODEL.md), [`PROVISIONING.md`](docs/PROVISIONING.md) |
 
 ## Build & test
