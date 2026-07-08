@@ -41,16 +41,26 @@ so only firmware signed with the project boot key ever runs (see
   at-rest capture.
 - **Stolen production device.** Signing requires the PIN. PIN correctness is
   the AEAD tag check (no faster oracle); each *online* guess costs a full
-  Argon2id pass (m = 256 KiB, t tuned to ≈1 s on-device).
+  Argon2id pass (m = 256 KiB, t tuned to ≈1 s on-device). `factoryReset` and
+  `rebootBootloader` require the same PIN (or an explicit `force`, for a
+  forgotten PIN) once a device is `prodLocked`/`prodReady`/`lockedOut` — USB or
+  physical possession of a locked device no longer suffices on its own to
+  destroy the CA key or force the device into the USB bootloader.
 - **Online PIN brute force.** The retry counter is persisted *before* each
   verification (anti power-glitch), failures back off exponentially
   (`min(250 ms·2^n, 30 s)`), and the device locks out after `maxRetries`
   (default 10), optionally wiping the key. Lockout survives reboot; only
-  `factoryReset` (key destruction) escapes.
+  `factoryReset` (key destruction) escapes. The backoff itself is enforced as a
+  gate keyed off the *persisted* attempt count and the monotonic timer's
+  reading *since boot* — not a blocking sleep — so power-cycling the device
+  between guesses restarts the same wait from zero rather than skipping it.
 - **Malicious firmware reflash (production, after the P4 burn).** With
   `SECURE_BOOT_ENABLE` burned, the bootrom refuses any image not signed with
   the project boot key. An attacker can no longer flash key-exfiltrating
-  firmware and wait for a legitimate unlock.
+  firmware and wait for a legitimate unlock. Before the burn, `rebootBootloader`
+  requiring the PIN (see above) also narrows who can force a device into the
+  bootloader in the first place — not just whoever can reach the BOOTSEL
+  button, but whoever can reach it *and* prove PIN knowledge (or use `force`).
 - **Power-glitch retry-counter bypass.** A tick that is interrupted mid-program
   still counts, and the tick is confirmed before the KEK is derived. Glitching
   costs an attempt rather than granting a free one.
@@ -87,7 +97,12 @@ so only firmware signed with the project boot key ever runs (see
 - **Host compromise while unlocked.** Once a production device is unlocked, a
   compromised host can request signatures until it is re-locked or unplugged.
   Mitigate with short validity, host-side rate limiting and audit, and locking
-  the device when idle (`picosignet lock`).
+  the device when idle (`picosignet lock`). `setTime` cannot be abused to
+  widen this window: it is bounded (a plausible first value per boot session,
+  ±15 minutes of the tracked time thereafter), so a compromised host can't
+  march the clock forward to pre-mint certificates dated outside their true
+  issuance window — but it can still request certificates at the *actual*
+  current time for as long as it holds an unlocked session.
 - **RAM scraping by code already running on the device.** The OTP secret and
   (while unlocked) the CA seed live in SRAM. With secure boot burned, "code
   already running" means our signed firmware — but a signing-key compromise or

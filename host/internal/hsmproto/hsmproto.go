@@ -17,18 +17,18 @@ type Envelope struct {
 
 // Request carries exactly one management command.
 type Request struct {
-	Init             *InitReq      `json:"init,omitempty"`
-	GenerateKey      *GenerateKey  `json:"generateKey,omitempty"`
-	GetPublicKey     *Empty        `json:"getPublicKey,omitempty"`
-	Unlock           *PinReq       `json:"unlock,omitempty"`
-	Lock             *Empty        `json:"lock,omitempty"`
-	SetTime          *SetTimeReq   `json:"setTime,omitempty"`
-	Status           *Empty        `json:"status,omitempty"`
-	ChangePin        *ChangePinReq `json:"changePin,omitempty"`
-	AddEntropy       *AddEntropy   `json:"addEntropy,omitempty"`
-	SelfTest         *Empty        `json:"selfTest,omitempty"`
-	FactoryReset     *Confirm      `json:"factoryReset,omitempty"`
-	RebootBootloader *Empty        `json:"rebootBootloader,omitempty"`
+	Init             *InitReq          `json:"init,omitempty"`
+	GenerateKey      *GenerateKey      `json:"generateKey,omitempty"`
+	GetPublicKey     *Empty            `json:"getPublicKey,omitempty"`
+	Unlock           *PinReq           `json:"unlock,omitempty"`
+	Lock             *Empty            `json:"lock,omitempty"`
+	SetTime          *SetTimeReq       `json:"setTime,omitempty"`
+	Status           *Empty            `json:"status,omitempty"`
+	ChangePin        *ChangePinReq     `json:"changePin,omitempty"`
+	AddEntropy       *AddEntropy       `json:"addEntropy,omitempty"`
+	SelfTest         *Empty            `json:"selfTest,omitempty"`
+	FactoryReset     *FactoryResetReq  `json:"factoryReset,omitempty"`
+	RebootBootloader *RebootBootloader `json:"rebootBootloader,omitempty"`
 }
 
 // Empty is a command with no arguments.
@@ -62,8 +62,26 @@ type AddEntropy struct {
 	Hex string `json:"hex"`
 }
 
-type Confirm struct {
+// FactoryResetReq erases the CA key and all config. A prodLocked/prodReady
+// device requires Pin (verified with the same tick/backoff/lockout accounting
+// as Unlock) unless Force is set — the "I forgot my PIN" escape hatch. A
+// lockedOut device only ever accepts Force: the device never verifies a PIN
+// once the retry budget is exhausted, so this can't become a second guessing
+// oracle.
+type FactoryResetReq struct {
 	Confirm string `json:"confirm"`
+	Pin     string `json:"pin,omitempty"`
+	Force   bool   `json:"force,omitempty"`
+}
+
+// RebootBootloader resets the device into the USB bootloader for reflashing.
+// Gated the same way as FactoryResetReq: free before the device is ever
+// initialized or in dev mode, otherwise Pin or Force is required — a
+// pre-secure-boot-burn device accepts arbitrary firmware over this same USB
+// connection once in the bootloader.
+type RebootBootloader struct {
+	Pin   string `json:"pin,omitempty"`
+	Force bool   `json:"force,omitempty"`
 }
 
 // Response is the device's reply envelope. Only the matching field is set; on

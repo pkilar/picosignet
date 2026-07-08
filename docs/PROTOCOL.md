@@ -76,10 +76,11 @@ zero elsewhere; memory reports total SRAM and the firmware's free-heap estimate.
 A fifth request variant carries device provisioning/lifecycle. Management
 **errors** stay *inside* the `hsm` response as a structured object (signer-path
 errors stay top-level). The bridge firewalls these away from network clients
-unless `--allow-remote-mgmt` is set.
+by default; see `PROVISIONING.md` for the per-listener `+mgmt` opt-in and
+`--allow-remote-mgmt`.
 
 Error object: `{"code":"ERR_*","message":"…","remainingAttempts":N,"backoffMs":N}`
-(the last two only on PIN failures).
+(the last two only on PIN failures/backoff).
 
 | Command          | Request                                                                            | Success response                                                                                                                 |
 | ---------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -94,8 +95,18 @@ Error object: `{"code":"ERR_*","message":"…","remainingAttempts":N,"backoffMs"
 | changePin        | `{"hsm":{"changePin":{"currentPin":"…","newPin":"…"}}}`                            | `{"hsm":{"changePin":{"ok":true}}}`                                                                                              |
 | addEntropy       | `{"hsm":{"addEntropy":{"hex":"…"}}}` (≤1024 B)                                     | `{"hsm":{"addEntropy":{"ok":true}}}`                                                                                             |
 | selfTest         | `{"hsm":{"selfTest":{}}}`                                                          | per-test pass/fail (below)                                                                                                       |
-| factoryReset     | `{"hsm":{"factoryReset":{"confirm":"ERASE"}}}`                                     | `{"hsm":{"factoryReset":{"ok":true}}}`                                                                                           |
-| rebootBootloader | `{"hsm":{"rebootBootloader":{}}}`                                                  | `{"hsm":{"rebootBootloader":{"ok":true}}}`, then the device resets into the USB bootloader (BOOTSEL) ~80 ms later for reflashing |
+| factoryReset     | `{"hsm":{"factoryReset":{"confirm":"ERASE","pin":"…"}}}` (or `"force":true`)       | `{"hsm":{"factoryReset":{"ok":true}}}`                                                                                           |
+| rebootBootloader | `{"hsm":{"rebootBootloader":{"pin":"…"}}}` (or `"force":true`)                     | `{"hsm":{"rebootBootloader":{"ok":true}}}`, then the device resets into the USB bootloader (BOOTSEL) ~80 ms later for reflashing |
+
+**`factoryReset`/`rebootBootloader` authorization**: free from `uninitialized`
+and `devReady` (nothing to protect yet, and dev mode has no PIN by design).
+From `prodLocked`/`prodReady`, either a correct `pin` (verified with the same
+tick/backoff/lockout accounting as `unlock` — a wrong guess counts the same)
+or `force:true` is required; USB/physical access to a locked device no longer
+suffices on its own to destroy the CA key or force a reflash-enabling reboot.
+From `lockedOut`, only `force:true` is accepted — a `pin` is never verified
+once the retry budget is exhausted, so this can't become a second guessing
+oracle. `force` is the explicit "I forgot my PIN" escape hatch.
 
 `status` payload: `state` (`uninitialized`/`devReady`/`prodLocked`/`prodReady`/
 `lockedOut`), `mode`, `keyPresent`, `unlocked`, `clockSet`, `unixSeconds`,
@@ -115,7 +126,16 @@ armed), `secureBoot` (bootrom signed-boot enforcement burned), `glitchReset`
   carries no timestamp. Push wall-clock time with `setTime`; the device tracks
   it as `monotonic + offset`. Until time is set, `signSshKey` fails closed with
   `{"error":"device clock not set; send hsm.setTime first"}`. The bridge sends
-  `setTime` on connect and every 5 minutes.
+  `setTime` on connect and every 5 minutes. `setTime` is unauthenticated by
+  design (needed before a signer is even unlocked), but it is not unbounded:
+  the *first* call in a boot session must be a plausible Unix time, and every
+  *later* call in the same session may only move the clock within 15 minutes
+  of where it already tracks — otherwise `{"hsm":{"error":{"code":"ERR_BAD_REQUEST",…}}}`.
+  This stops a compromised, signing-capable host from marching the clock
+  arbitrarily far into the future immediately before `signSshKey` to pre-mint
+  certificates dated outside their true issuance window. A genuine reboot
+  resets the bound (the device may have been off for an arbitrary real-world
+  duration).
 - **Entropy**: the RP2350 hardware TRNG is sampled raw (its built-in
   post-processing bypassed), health-checked on-device (repetition-count +
   adaptive-proportion per SP 800-90B), then SHA-512-conditioned into a ChaCha20

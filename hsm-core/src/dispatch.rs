@@ -65,6 +65,7 @@ const ERR_LOCKED_OUT: &str = "ERR_LOCKED_OUT";
 const ERR_BAD_MODE: &str = "ERR_BAD_MODE";
 const ERR_ENTROPY: &str = "ERR_ENTROPY";
 const ERR_FLASH: &str = "ERR_FLASH";
+const ERR_BUSY: &str = "ERR_BUSY";
 const ERR_INTERNAL: &str = "ERR_INTERNAL";
 
 /// The device session and dispatcher.
@@ -403,8 +404,8 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             self.hsm_self_test()
         } else if let Some(r) = h.factory_reset {
             self.hsm_factory_reset(r)
-        } else if h.reboot_bootloader.is_some() {
-            self.hsm_reboot_bootloader()
+        } else if let Some(r) = h.reboot_bootloader {
+            self.hsm_reboot_bootloader(r)
         } else {
             HsmResponse::err(ERR_BAD_REQUEST, "exactly one hsm command expected")
         }
@@ -414,7 +415,47 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     /// is sent. The actual reset is hardware-specific, so the core only sets a
     /// flag the firmware consumes via [`Self::take_reboot_requested`]; the
     /// simulator simply ignores it.
-    fn hsm_reboot_bootloader(&mut self) -> HsmResponse {
+    ///
+    /// Gated the same way as [`Self::hsm_factory_reset`]: free from
+    /// `Uninitialized`/`DevReady` (nothing to protect — a fresh board must be
+    /// reboot-able before it's ever initialized, and dev mode has no PIN by
+    /// design), but a `prodLocked`/`prodReady`/`lockedOut` device requires
+    /// proof of PIN knowledge or an explicit `force`. Before the production
+    /// secure-boot burn, PICOBOOT accepts arbitrary firmware over this same
+    /// USB connection once in the bootloader — so forcing a device there is
+    /// not just a denial-of-service, it can reopen the malicious-reflash
+    /// window the PIN is supposed to gate.
+    fn hsm_reboot_bootloader(&mut self, req: RebootBootloaderReq) -> HsmResponse {
+        match self.state {
+            DeviceState::ProdLocked | DeviceState::ProdReady => {
+                if !req.force {
+                    match &req.pin {
+                        Some(pin) => {
+                            if let Err(resp) = self.verify_pin(pin) {
+                                return resp;
+                            }
+                        }
+                        None => {
+                            return HsmResponse::err(
+                                ERR_BAD_REQUEST,
+                                "rebooting into the bootloader requires \"pin\" or \"force\":true in prod mode",
+                            )
+                        }
+                    }
+                }
+            }
+            DeviceState::LockedOut => {
+                // Never accept a PIN here — verifying one would reopen a
+                // guessing oracle after the retry budget is exhausted.
+                if !req.force {
+                    return HsmResponse::err(
+                        ERR_LOCKED_OUT,
+                        "device locked out; rebooting into the bootloader requires \"force\":true",
+                    );
+                }
+            }
+            DeviceState::Uninitialized | DeviceState::DevReady => {}
+        }
         self.reboot_requested = true;
         HsmResponse::with(|r| r.reboot_bootloader = Some(OkResp { ok: true }))
     }
@@ -510,7 +551,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 {
                     return HsmResponse::err(ERR_FLASH, "failed to write config");
                 }
-                let _ = pin::reset(&mut self.flash);
+                self.reset_pin_counter_best_effort();
 
                 self.config = Some(cfg);
                 self.ca_pubkey = Some(pubkey);
@@ -643,14 +684,24 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     }
 
     fn hsm_set_time(&mut self, req: SetTimeReq) -> HsmResponse {
-        let previous = self.clock.set(&self.mono, req.unix_seconds);
-        HsmResponse::with(|r| {
-            r.set_time = Some(SetTimeResp {
-                ok: true,
-                uptime_ms: self.mono.now_micros() / 1000,
-                previous_set: previous,
-            })
-        })
+        match self.clock.set(&self.mono, req.unix_seconds) {
+            Ok(previous_set) => HsmResponse::with(|r| {
+                r.set_time = Some(SetTimeResp {
+                    ok: true,
+                    uptime_ms: self.mono.now_micros() / 1000,
+                    previous_set,
+                })
+            }),
+            // See `clock::Clock::set`: rejects an implausible first-ever value
+            // or, once a time is already tracked, a jump too large to be a
+            // legitimate resync — closing the gap where an unbounded clock let
+            // anything with signing access pre-mint certificates dated far
+            // outside their true issuance window.
+            Err(crate::clock::Rejected) => HsmResponse::err(
+                ERR_BAD_REQUEST,
+                "unixSeconds is implausible or drifts too far from the device's tracked time",
+            ),
+        }
     }
 
     fn hsm_status(&mut self) -> HsmResponse {
@@ -750,7 +801,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
         {
             return HsmResponse::err(ERR_FLASH, "failed to write key");
         }
-        let _ = pin::reset(&mut self.flash);
+        self.reset_pin_counter_best_effort();
         if was_ready {
             self.ca = Some(CaKey::from_seed(&seed));
             self.wrap_kek = Some(new_kek);
@@ -822,9 +873,46 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
         })
     }
 
+    /// Erase the CA key and all config. A `prodLocked`/`prodReady` device
+    /// requires the current PIN (reusing `verify_pin`'s tick/backoff/lockout
+    /// accounting — a wrong guess here counts the same as a wrong `unlock`)
+    /// unless `force` is set, so physical/USB access to a locked device no
+    /// longer suffices on its own to destroy the CA key. `force` remains as
+    /// the "I forgot my PIN" escape hatch — but it is never accepted as a way
+    /// to bypass PIN *verification* while locked out: `lockedOut` only takes
+    /// `force`, never a `pin`, so this can't become a second guessing oracle
+    /// after the retry budget is already exhausted.
     fn hsm_factory_reset(&mut self, req: FactoryResetReq) -> HsmResponse {
         if req.confirm != "ERASE" {
             return HsmResponse::err(ERR_BAD_REQUEST, "confirm must be \"ERASE\"");
+        }
+        match self.state {
+            DeviceState::ProdLocked | DeviceState::ProdReady => {
+                if !req.force {
+                    match &req.pin {
+                        Some(pin) => {
+                            if let Err(resp) = self.verify_pin(pin) {
+                                return resp;
+                            }
+                        }
+                        None => {
+                            return HsmResponse::err(
+                                ERR_BAD_REQUEST,
+                                "factory-reset requires \"pin\" or \"force\":true in prod mode",
+                            )
+                        }
+                    }
+                }
+            }
+            DeviceState::LockedOut => {
+                if !req.force {
+                    return HsmResponse::err(
+                        ERR_LOCKED_OUT,
+                        "device locked out; factory-reset requires \"force\":true",
+                    );
+                }
+            }
+            DeviceState::Uninitialized | DeviceState::DevReady => {}
         }
         // Drop live secrets from RAM first, regardless of the flash outcome.
         self.ca = None;
@@ -858,9 +946,40 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     /// Pre-tick the counter, derive the PIN KEK, and unwrap the seed. On a wrong
     /// PIN, applies backoff and lockout (wiping the key if configured) and
     /// returns the structured error response.
+    ///
+    /// The backoff owed for *prior* failures is enforced as a gate here —
+    /// before any flash write or Argon2id work for *this* attempt — rather
+    /// than as a blocking sleep after the fact. Two things fall out of that:
+    /// every response stays fast (bounded by Argon2id, not by up to 30s of
+    /// accumulated backoff — a shared serial transport with a fixed read
+    /// timeout can otherwise time out mid-response and, on retry, receive a
+    /// *different* request's stale answer); and the gate is reset-resistant,
+    /// since it reads the *persisted* attempt count and the monotonic timer's
+    /// reading *since this boot* — an attacker power-cycling the device
+    /// between guesses just restarts the same countdown from zero rather than
+    /// skipping it, unlike a synchronous sleep a reset simply aborts.
     #[allow(clippy::result_large_err)] // HsmResponse is the natural error payload here
     fn verify_pin(&mut self, pin_str: &str) -> Result<UnlockedSeed, HsmResponse> {
         let cfg = self.config.expect("prod implies config");
+
+        let prior_failures = match pin::count(&mut self.flash) {
+            Ok(n) => n,
+            Err(_) => return Err(HsmResponse::err(ERR_FLASH, "counter read failed")),
+        };
+        if prior_failures > 0 {
+            let required_ms = pin::backoff_ms(prior_failures.saturating_sub(1) as u32) as u64;
+            let elapsed_ms = self.mono.now_micros() / 1000;
+            if elapsed_ms < required_ms {
+                let remaining = (cfg.max_retries as u32).saturating_sub(prior_failures as u32);
+                return Err(pin_error(
+                    ERR_BUSY,
+                    "still backing off after a recent failed attempt",
+                    remaining,
+                    (required_ms - elapsed_ms) as u32,
+                ));
+            }
+        }
+
         let attempts = match pin::tick(&mut self.flash) {
             Ok(a) => a,
             Err(_) => return Err(HsmResponse::err(ERR_FLASH, "counter write failed")),
@@ -888,13 +1007,15 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
         };
         match unwrap_seed(&kek, &blob) {
             Ok(seed) => {
-                let _ = pin::reset(&mut self.flash);
+                self.reset_pin_counter_best_effort();
                 Ok((seed, kek, blob.salt))
             }
             Err(_) => {
                 let max = cfg.max_retries as u32;
+                // Reported to the client as a hint for when the *next* attempt
+                // will be honored by the gate above — no longer slept out
+                // synchronously here.
                 let backoff = pin::backoff_ms(attempts.saturating_sub(1) as u32);
-                self.mono.delay_ms(backoff);
                 if attempts as u32 >= max {
                     self.state = DeviceState::LockedOut;
                     if cfg.wipe_on_lockout {
@@ -938,6 +1059,36 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             }
         }
         false
+    }
+
+    /// Reset the PIN attempt counter, retrying once on failure (mirrors
+    /// [`Self::erase_key_verified`]'s bounded retry). Called after proving PIN
+    /// knowledge or committing a fresh config/key — a lingering non-zero
+    /// counter here is fail-*closed* (it can only cause a spurious future
+    /// lockout, never weaken PIN gating), so this improves reliability
+    /// without blocking an otherwise-successful response on a single flash
+    /// erase hiccup.
+    fn reset_pin_counter_best_effort(&mut self) {
+        for _ in 0..2 {
+            if pin::reset(&mut self.flash).is_ok() {
+                return;
+            }
+        }
+    }
+
+    /// Force a production device back to `ProdLocked`, dropping the live CA
+    /// key, independent of the `hsm.lock` command. Intended for the firmware
+    /// to call on a transport-level disconnect (USB bus reset/suspend) —
+    /// `docs/THREAT_MODEL.md` documents production devices as re-locking on
+    /// exactly those events. No-op outside `ProdReady` (dev mode has no lock
+    /// concept; every other state has no live key to drop).
+    pub fn relock_on_transport_reset(&mut self) {
+        if self.state == DeviceState::ProdReady {
+            self.ca = None;
+            self.wrap_kek = None;
+            self.wrap_salt = None;
+            self.state = DeviceState::ProdLocked;
+        }
     }
 
     /// Ensure the DRBG has been seeded at least once (used on the signing hot
@@ -1033,6 +1184,13 @@ mod tests {
     fn call<F: FlashStore>(hsm: &mut Hsm<MockEntropy, MockClock, F>, json: &str) -> Value {
         let out = hsm.process_line(json.as_bytes());
         serde_json::from_slice(&out).expect("response is valid JSON")
+    }
+
+    /// Advance the mock monotonic clock (test helper for the PIN backoff
+    /// gate, which is reset-resistant and therefore keyed off `mono`, not a
+    /// blocking sleep — see `verify_pin`).
+    fn advance<F: FlashStore>(hsm: &mut Hsm<MockEntropy, MockClock, F>, secs: u64) {
+        hsm.mono.advance_secs(secs);
     }
 
     fn user_ed25519_line() -> String {
@@ -1232,6 +1390,10 @@ mod tests {
         assert_eq!(w["hsm"]["error"]["remainingAttempts"], 2);
         assert_eq!(h.state(), DeviceState::ProdLocked);
 
+        // The next attempt is gated until the reported backoff elapses (see
+        // `verify_pin`); advance past it before retrying.
+        advance(&mut h, 1);
+
         // Correct PIN: unlocked.
         let u = call(&mut h, r#"{"hsm":{"unlock":{"pin":"hunter2"}}}"#);
         assert_eq!(u["hsm"]["unlock"]["ok"], true);
@@ -1241,7 +1403,8 @@ mod tests {
         let resp = call(&mut h, &sign_request("2h"));
         let cert = resp["signSshKey"]["signed_key"].as_str().unwrap();
         let f = verify_and_decode(cert, &ca_pub);
-        assert_eq!(f.valid_before, 1_700_000_000 + 7200);
+        // +1 for the `advance(&mut h, 1)` paid out above to clear the backoff gate.
+        assert_eq!(f.valid_before, 1_700_000_000 + 1 + 7200);
 
         // Lock: signing fails again.
         call(&mut h, r#"{"hsm":{"lock":{}}}"#);
@@ -1260,9 +1423,11 @@ mod tests {
             &mut h,
             r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2","maxRetries":3,"wipeOnLockout":true}}}"#,
         );
-        // Three wrong attempts -> lockout, key wiped.
+        // Three wrong attempts -> lockout, key wiped. Each attempt is gated
+        // behind the previous one's backoff (see `verify_pin`).
         for _ in 0..3 {
             call(&mut h, r#"{"hsm":{"unlock":{"pin":"nope"}}}"#);
+            advance(&mut h, 1);
         }
         assert_eq!(h.state(), DeviceState::LockedOut);
         let e = call(&mut h, r#"{"hsm":{"unlock":{"pin":"hunter2"}}}"#);
@@ -1271,10 +1436,187 @@ mod tests {
         let pk = call(&mut h, r#"{"hsm":{"getPublicKey":{}}}"#);
         assert_eq!(pk["hsm"]["error"]["code"], "ERR_NO_KEY");
 
-        // factoryReset escapes lockout.
-        let fr = call(&mut h, r#"{"hsm":{"factoryReset":{"confirm":"ERASE"}}}"#);
+        // factoryReset escapes lockout — but only with `force`, since a
+        // lockedOut device never accepts a `pin` (that would reopen a
+        // guessing oracle after the retry budget is exhausted).
+        let denied = call(&mut h, r#"{"hsm":{"factoryReset":{"confirm":"ERASE"}}}"#);
+        assert_eq!(denied["hsm"]["error"]["code"], "ERR_LOCKED_OUT");
+        let fr = call(
+            &mut h,
+            r#"{"hsm":{"factoryReset":{"confirm":"ERASE","force":true}}}"#,
+        );
         assert_eq!(fr["hsm"]["factoryReset"]["ok"], true);
         assert_eq!(h.state(), DeviceState::Uninitialized);
+    }
+
+    #[test]
+    fn factory_reset_requires_pin_or_force_when_locked() {
+        // A prodLocked device must not be destroyable by an attacker who only
+        // has USB/physical access but not the PIN — the primary regression
+        // test for the unauthenticated-factoryReset finding.
+        let mut h = boot();
+        call(
+            &mut h,
+            r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw"}}}"#,
+        );
+        assert_eq!(h.state(), DeviceState::ProdLocked);
+
+        // No pin, no force: rejected, key intact.
+        let denied = call(&mut h, r#"{"hsm":{"factoryReset":{"confirm":"ERASE"}}}"#);
+        assert_eq!(denied["hsm"]["error"]["code"], "ERR_BAD_REQUEST");
+        assert_eq!(h.state(), DeviceState::ProdLocked);
+
+        // Wrong pin: rejected as a normal bad-PIN attempt (ticks the counter).
+        let wrong = call(
+            &mut h,
+            r#"{"hsm":{"factoryReset":{"confirm":"ERASE","pin":"nope"}}}"#,
+        );
+        assert_eq!(wrong["hsm"]["error"]["code"], "ERR_BAD_PIN");
+        assert_eq!(h.state(), DeviceState::ProdLocked);
+        advance(&mut h, 1);
+
+        // Correct pin: erases as before.
+        let ok = call(
+            &mut h,
+            r#"{"hsm":{"factoryReset":{"confirm":"ERASE","pin":"hunter2pw"}}}"#,
+        );
+        assert_eq!(ok["hsm"]["factoryReset"]["ok"], true);
+        assert_eq!(h.state(), DeviceState::Uninitialized);
+    }
+
+    #[test]
+    fn factory_reset_force_bypasses_forgotten_pin() {
+        // The explicit fallback for a forgotten PIN, from a still-reachable
+        // (not locked-out) prodLocked device.
+        let mut h = boot();
+        call(
+            &mut h,
+            r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw"}}}"#,
+        );
+        let r = call(
+            &mut h,
+            r#"{"hsm":{"factoryReset":{"confirm":"ERASE","force":true}}}"#,
+        );
+        assert_eq!(r["hsm"]["factoryReset"]["ok"], true);
+        assert_eq!(h.state(), DeviceState::Uninitialized);
+    }
+
+    #[test]
+    fn reboot_bootloader_requires_pin_or_force_when_locked() {
+        // Mirrors the factoryReset gating: a locked device must not let an
+        // unauthenticated USB party force it into the bootloader, which (pre
+        // secure-boot burn) accepts arbitrary firmware over the same USB link.
+        let mut h = boot();
+        call(
+            &mut h,
+            r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw"}}}"#,
+        );
+
+        let denied = call(&mut h, r#"{"hsm":{"rebootBootloader":{}}}"#);
+        assert_eq!(denied["hsm"]["error"]["code"], "ERR_BAD_REQUEST");
+
+        let forced = call(&mut h, r#"{"hsm":{"rebootBootloader":{"force":true}}}"#);
+        assert_eq!(forced["hsm"]["rebootBootloader"]["ok"], true);
+    }
+
+    #[test]
+    fn reboot_bootloader_unrestricted_before_provisioning() {
+        // A fresh, never-initialized board must stay reboot-able into the
+        // bootloader with no PIN — there is nothing to protect yet, and it
+        // must be flashable for the very first time.
+        let mut h = boot();
+        assert_eq!(h.state(), DeviceState::Uninitialized);
+        let r = call(&mut h, r#"{"hsm":{"rebootBootloader":{}}}"#);
+        assert_eq!(r["hsm"]["rebootBootloader"]["ok"], true);
+    }
+
+    #[test]
+    fn pin_backoff_gate_resists_reboot() {
+        // The core regression test for the reset-skippable-backoff finding: a
+        // failed attempt's backoff must still be paid out even across a real
+        // reboot (a fresh `Hsm`/monotonic clock over the same persisted
+        // flash), not just within one continuous session.
+        let mut flash = MockFlash::new();
+        {
+            let mut h = Hsm::boot(MockEntropy::new(1), MockClock::new(), &mut flash);
+            call(
+                &mut h,
+                r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw","maxRetries":10}}}"#,
+            );
+            let w = call(&mut h, r#"{"hsm":{"unlock":{"pin":"nope"}}}"#);
+            assert_eq!(w["hsm"]["error"]["code"], "ERR_BAD_PIN");
+        }
+        // "Reboot": fresh Hsm, fresh monotonic clock (starts at 0 again), same
+        // flash — the persisted attempt count survives, so the gate must
+        // still refuse an immediate retry even with the correct PIN.
+        let mut h2 = Hsm::boot(MockEntropy::new(2), MockClock::new(), &mut flash);
+        let too_soon = call(&mut h2, r#"{"hsm":{"unlock":{"pin":"hunter2pw"}}}"#);
+        assert_eq!(too_soon["hsm"]["error"]["code"], "ERR_BUSY");
+        assert_eq!(h2.state(), DeviceState::ProdLocked);
+
+        // Waiting out the reported backoff (from this boot's zero point) lets
+        // the correct PIN through.
+        advance(&mut h2, 1);
+        let ok = call(&mut h2, r#"{"hsm":{"unlock":{"pin":"hunter2pw"}}}"#);
+        assert_eq!(ok["hsm"]["unlock"]["ok"], true);
+    }
+
+    #[test]
+    fn pin_backoff_gate_does_not_apply_to_first_attempt() {
+        // No prior failures means no gate — a freshly initialized device's
+        // very first unlock must not be delayed.
+        let mut h = boot();
+        call(
+            &mut h,
+            r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw"}}}"#,
+        );
+        let ok = call(&mut h, r#"{"hsm":{"unlock":{"pin":"hunter2pw"}}}"#);
+        assert_eq!(ok["hsm"]["unlock"]["ok"], true);
+    }
+
+    #[test]
+    fn set_time_rejects_implausible_first_value() {
+        let mut h = boot();
+        let r = call(&mut h, r#"{"hsm":{"setTime":{"unixSeconds":1}}}"#);
+        assert_eq!(r["hsm"]["error"]["code"], "ERR_BAD_REQUEST");
+        let s = call(&mut h, r#"{"hsm":{"status":{}}}"#);
+        assert_eq!(s["hsm"]["status"]["clockSet"], false);
+    }
+
+    #[test]
+    fn set_time_rejects_large_forward_jump_after_first_set() {
+        // The regression test for the unbounded-setTime finding: a
+        // signing-capable host must not be able to march the clock a year
+        // into the future immediately before signing, to pre-mint
+        // certificates dated outside their true issuance window.
+        let mut h = boot();
+        call(&mut h, r#"{"hsm":{"init":{"mode":"dev"}}}"#);
+        call(&mut h, r#"{"hsm":{"generateKey":{}}}"#);
+        let ok = call(&mut h, r#"{"hsm":{"setTime":{"unixSeconds":1700000000}}}"#);
+        assert_eq!(ok["hsm"]["setTime"]["ok"], true);
+
+        let one_year = 365 * 24 * 3600;
+        let jumped = call(
+            &mut h,
+            &format!(
+                r#"{{"hsm":{{"setTime":{{"unixSeconds":{}}}}}}}"#,
+                1_700_000_000 + one_year
+            ),
+        );
+        assert_eq!(jumped["hsm"]["error"]["code"], "ERR_BAD_REQUEST");
+
+        // The clock did not move: a cert signed now still gets the original
+        // (unjumped) validity window.
+        let resp = call(&mut h, &sign_request("1h"));
+        let cert = resp["signSshKey"]["signed_key"].as_str().unwrap();
+        let ca_line = call(&mut h, r#"{"hsm":{"getPublicKey":{}}}"#)["hsm"]["getPublicKey"]
+            ["publicKey"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let ca_pub = ca_pub_from_line(&ca_line);
+        let f = verify_and_decode(cert, &ca_pub);
+        assert_eq!(f.valid_before, 1_700_000_000 + 3600);
     }
 
     #[test]
@@ -1420,6 +1762,11 @@ mod tests {
         }
         {
             let mut h = Hsm::boot(MockEntropy::new(4), MockClock::new(), &mut flash);
+            // The previous block's rejected old-PIN attempt persisted a
+            // failure to flash; a fresh boot's monotonic clock restarts at
+            // zero, so the backoff gate must be waited out again here too
+            // (this is precisely the reset-resistance `verify_pin` provides).
+            advance(&mut h, 1);
             assert_eq!(
                 call(&mut h, r#"{"hsm":{"unlock":{"pin":"newpassword"}}}"#)["hsm"]["unlock"]["ok"],
                 true
@@ -1440,7 +1787,10 @@ mod tests {
         }
         flash.set_erase_fault(true);
         let mut h = Hsm::boot(MockEntropy::new(2), MockClock::new(), &mut flash);
-        let r = call(&mut h, r#"{"hsm":{"factoryReset":{"confirm":"ERASE"}}}"#);
+        let r = call(
+            &mut h,
+            r#"{"hsm":{"factoryReset":{"confirm":"ERASE","force":true}}}"#,
+        );
         assert_eq!(r["hsm"]["error"]["code"], "ERR_FLASH");
         // State must reflect reality: the key record is still present.
         let s = call(&mut h, r#"{"hsm":{"status":{}}}"#);

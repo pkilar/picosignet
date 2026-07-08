@@ -34,11 +34,25 @@ const (
 // Options configures the bridge.
 type Options struct {
 	// Listen specs: "vsock:PORT", "tcp:HOST:PORT", "unix:PATH" (comma-joined on
-	// the CLI, pre-split here).
+	// the CLI, pre-split here). Any entry may carry a "+mgmt" suffix (e.g.
+	// "unix:/run/picosignet.sock+mgmt") to allow `hsm` management commands on
+	// that listener specifically, independent of AllowRemoteMgmt — see the
+	// AllowRemoteMgmt doc for why this matters when a single bridge process
+	// serves both a trusted local socket and a network-facing one.
 	Listen []string
-	// AllowRemoteMgmt permits `hsm` management commands from network clients.
-	// Off by default: provisioning should happen over the local CLI.
+	// AllowRemoteMgmt permits `hsm` management commands from network clients
+	// on *every* configured listener. Off by default: provisioning should
+	// happen over the local CLI. Because it applies process-wide, enabling it
+	// to reach one trusted listener (e.g. a local unix socket) also opens
+	// every other listener in the same invocation (e.g. a vsock/tcp listener
+	// meant only for ssh-cert-api's signing traffic) — prefer tagging just
+	// the listener that needs it with "+mgmt" in Listen instead.
 	AllowRemoteMgmt bool
+}
+
+type boundListener struct {
+	net.Listener
+	allowMgmt bool
 }
 
 // Run starts the listeners and the time-sync loop, forwarding traffic to conn
@@ -46,17 +60,22 @@ type Options struct {
 func Run(ctx context.Context, conn device.Conn, opts Options) error {
 	b := &bridge{conn: conn, allowRemoteMgmt: opts.AllowRemoteMgmt}
 
-	var listeners []net.Listener
+	var listeners []boundListener
 	for _, spec := range opts.Listen {
-		l, err := listen(spec)
+		raw, mgmt := splitMgmtSuffix(spec)
+		l, err := listen(raw)
 		if err != nil {
 			for _, prev := range listeners {
 				_ = prev.Close()
 			}
 			return fmt.Errorf("listen %q: %w", spec, err)
 		}
-		listeners = append(listeners, l)
-		log.Printf("bridge: listening on %s", spec)
+		listeners = append(listeners, boundListener{Listener: l, allowMgmt: mgmt})
+		if mgmt {
+			log.Printf("bridge: listening on %s (management commands allowed)", raw)
+		} else {
+			log.Printf("bridge: listening on %s", raw)
+		}
 	}
 	if len(listeners) == 0 {
 		return errors.New("no listeners configured")
@@ -79,7 +98,7 @@ func Run(ctx context.Context, conn device.Conn, opts Options) error {
 
 	for _, l := range listeners {
 		wg.Add(1)
-		go func(l net.Listener) {
+		go func(l boundListener) {
 			defer wg.Done()
 			b.acceptLoop(ctx, l)
 		}(l)
@@ -91,6 +110,15 @@ func Run(ctx context.Context, conn device.Conn, opts Options) error {
 type bridge struct {
 	conn            device.Conn
 	allowRemoteMgmt bool
+}
+
+// splitMgmtSuffix strips a trailing "+mgmt" from a listen spec, reporting
+// whether it was present.
+func splitMgmtSuffix(spec string) (string, bool) {
+	if raw, ok := strings.CutSuffix(spec, "+mgmt"); ok {
+		return raw, true
+	}
+	return spec, false
 }
 
 func listen(spec string) (net.Listener, error) {
@@ -114,7 +142,7 @@ func listen(spec string) (net.Listener, error) {
 	}
 }
 
-func (b *bridge) acceptLoop(ctx context.Context, l net.Listener) {
+func (b *bridge) acceptLoop(ctx context.Context, l boundListener) {
 	sem := make(chan struct{}, maxConns)
 	var wg sync.WaitGroup
 	for {
@@ -136,13 +164,13 @@ func (b *bridge) acceptLoop(ctx context.Context, l net.Listener) {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			b.handleConn(ctx, conn)
+			b.handleConn(ctx, conn, l.allowMgmt)
 		}()
 	}
 	wg.Wait()
 }
 
-func (b *bridge) handleConn(ctx context.Context, conn net.Conn) {
+func (b *bridge) handleConn(ctx context.Context, conn net.Conn, listenerAllowsMgmt bool) {
 	defer func() { _ = conn.Close() }()
 	context.AfterFunc(ctx, func() { _ = conn.Close() })
 
@@ -154,7 +182,7 @@ func (b *bridge) handleConn(ctx context.Context, conn net.Conn) {
 		if !scanner.Scan() {
 			return
 		}
-		resp := b.forward(ctx, scanner.Bytes())
+		resp := b.forward(ctx, scanner.Bytes(), listenerAllowsMgmt)
 		_ = conn.SetWriteDeadline(time.Now().Add(connDeadline))
 		if _, err := conn.Write(append(resp, '\n')); err != nil {
 			return
@@ -165,9 +193,13 @@ func (b *bridge) handleConn(ctx context.Context, conn net.Conn) {
 	}
 }
 
-// forward applies the management firewall, then relays the line to the device.
-func (b *bridge) forward(ctx context.Context, line []byte) []byte {
-	if !b.allowRemoteMgmt && hsmproto.IsManagementLine(line) {
+// forward applies the management firewall, then relays the line to the
+// device. A line is allowed through if either the process-wide
+// AllowRemoteMgmt flag is set, or the listener this connection arrived on was
+// specifically tagged "+mgmt" — so opting one trusted listener in doesn't
+// silently open every other listener in the same bridge invocation.
+func (b *bridge) forward(ctx context.Context, line []byte, listenerAllowsMgmt bool) []byte {
+	if !(b.allowRemoteMgmt || listenerAllowsMgmt) && hsmproto.IsManagementLine(line) {
 		return errorLine("management commands are not permitted over the network")
 	}
 	// Copy: scanner.Bytes() is only valid until the next Scan.

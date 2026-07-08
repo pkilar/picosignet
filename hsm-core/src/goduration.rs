@@ -34,9 +34,11 @@ fn unit_map(u: &str) -> Option<u64> {
     })
 }
 
-/// Go's `time.quote`: a double-quoted rendering with `"`/`\` escaped and any
-/// byte outside `0x20..=0x7f` emitted as `\xHH`.
-fn quote(s: &str) -> String {
+/// Go's `time.quote` (== `strconv.Quote` for our purposes): a double-quoted
+/// rendering with `"`/`\` escaped and any byte outside `0x20..=0x7f` emitted
+/// as `\xHH`. Shared with [`crate::validate`] so every `%q`-style rendering
+/// in an error message byte-matches cerberus, not just duration errors.
+pub(crate) fn quote(s: &str) -> String {
     let mut buf = String::with_capacity(s.len() + 2);
     buf.push('"');
     for &b in s.as_bytes() {

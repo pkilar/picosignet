@@ -75,25 +75,29 @@ pub enum Region {
 }
 
 /// Block flash access plus the device's non-volatile identity facts.
-/// Every region is exactly [`FlashStore::SECTOR`] bytes and erases as a unit;
-/// programming is page-granular.
+/// Every region is exactly [`SECTOR_LEN`] bytes and erases as a unit;
+/// programming is page-granular at [`PAGE_LEN`]. These sizes are fixed for the
+/// project's one supported target (RP2350 + its QSPI flash) — deliberately
+/// *not* per-implementation associated consts: the record/tick-log math in
+/// [`crate::storage`] and [`crate::pin`] is written against the free
+/// constants directly (Rust's stable const-generics can't thread an
+/// associated const of a generic type parameter into a fixed-size array
+/// bound), so an override here would silently fail to actually resize
+/// anything and corrupt the A/B record scheme. Porting to different flash
+/// geometry means updating `SECTOR_LEN`/`PAGE_LEN` themselves, not
+/// implementing a new value here.
 ///
 /// On RP2350 these operations run the bootrom flash routines from RAM with
 /// interrupts masked, so a call may stall the USB stack for tens to hundreds of
 /// milliseconds. The core only writes flash during provisioning/unlock, never
 /// concurrently with a signing hot path, so this is acceptable.
 pub trait FlashStore {
-    /// Erase granularity and the size of every [`Region`]. RP2350 = 4096.
-    const SECTOR: usize = 4096;
-    /// Program granularity. RP2350 = 256.
-    const PAGE: usize = 256;
-
     /// Read the entire sector backing `region` into `buf` (must be
-    /// `>= SECTOR`).
+    /// `>= SECTOR_LEN`).
     fn read(&mut self, region: Region, buf: &mut [u8]) -> Result<(), HalError>;
     /// Erase the sector backing `region` to all-`0xFF`.
     fn erase(&mut self, region: Region) -> Result<(), HalError>;
-    /// Program one [`FlashStore::PAGE`]-sized page at `offset` within `region`.
+    /// Program one [`PAGE_LEN`]-sized page at `offset` within `region`.
     /// `offset` must be page-aligned and within the sector.
     fn program(&mut self, region: Region, offset: usize, page: &[u8]) -> Result<(), HalError>;
 
@@ -142,8 +146,6 @@ impl<T: Monotonic> Monotonic for &mut T {
 }
 
 impl<T: FlashStore> FlashStore for &mut T {
-    const SECTOR: usize = T::SECTOR;
-    const PAGE: usize = T::PAGE;
     fn read(&mut self, region: Region, buf: &mut [u8]) -> Result<(), HalError> {
         (**self).read(region, buf)
     }

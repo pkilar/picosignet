@@ -115,6 +115,14 @@ tick is written and confirmed *before* the KEK is derived, so a glitch during
 verification always costs an attempt; it cannot be used to brute-force the PIN
 for free. Up to 4096 attempts fit per erase, far above any sane `max_retries`.
 
+The exponential backoff between attempts (`min(250 ms·2^n, 30 s)`) is enforced
+as a gate read from this same persisted count, checked against the monotonic
+timer's reading *since boot* — not a blocking sleep. A blocking sleep is
+trivially defeated by power-cycling the device mid-wait; reading the gate from
+flash means a reset just restarts the same wait from zero instead of skipping
+it, and keeps every response fast enough that a shared serial transport's read
+timeout never trips mid-backoff.
+
 NOR note: every tick for counts < 256 lands in page 0, programmed incrementally
 (only ever clearing fresh bits, never re-programming a byte). The W25Q-class
 flash permits this.

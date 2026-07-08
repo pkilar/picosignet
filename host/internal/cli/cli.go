@@ -91,10 +91,12 @@ usage: picosignet <command> [flags]
   status         print device status
   set-time       push wall-clock time to the device
   change-pin     change the production-mode PIN
-  factory-reset  erase all keys and config (destructive)
+  factory-reset  erase all keys and config (destructive; prompts for the PIN
+                 in prod mode, or pass --force if it's been forgotten)
   self-test      run on-device self-tests and an end-to-end signing check
   add-entropy    mix host-supplied entropy into the device pool
-  reboot-bootloader  reset the device into the USB bootloader (for reflashing)
+  reboot-bootloader  reset the device into the USB bootloader (for reflashing;
+                 prompts for the PIN in prod mode, or pass --force)
 
 Common flags: --port <path> (default: auto-discover), --timeout <dur>
 `)
@@ -150,6 +152,20 @@ func sendHsm(conn device.Conn, req *hsmproto.Request, timeout time.Duration) (*h
 	return resp.Hsm, nil
 }
 
+// devicePromptsForPin reports whether factory-reset/reboot-bootloader should
+// prompt for a PIN: only in prod mode, where the device actually gates on
+// one. Dev mode and an uninitialized device ignore the field, so skip
+// pestering the operator for it there. Any status error falls back to
+// prompting — better an unnecessary prompt than silently skipping a PIN the
+// device actually requires.
+func devicePromptsForPin(conn device.Conn, timeout time.Duration) bool {
+	body, err := sendHsm(conn, &hsmproto.Request{Status: &hsmproto.Empty{}}, timeout)
+	if err != nil || body.Status == nil {
+		return true
+	}
+	return body.Status.Mode == "prod"
+}
+
 // pipedStdin is a persistent reader for non-interactive PIN entry, so a
 // multi-prompt flow (change-pin) reads successive lines correctly.
 var pipedStdin *bufio.Reader
@@ -181,8 +197,11 @@ func readSecret(prompt string) (string, error) {
 func cmdBridge(args []string) error {
 	fs := flag.NewFlagSet("bridge", flag.ContinueOnError)
 	c := bindCommon(fs)
-	listen := fs.String("listen", "vsock:5000", "comma-separated listeners: vsock:PORT,tcp:HOST:PORT,unix:PATH")
-	allowRemoteMgmt := fs.Bool("allow-remote-mgmt", false, "permit hsm management commands from network clients")
+	listen := fs.String("listen", "vsock:5000", "comma-separated listeners: vsock:PORT,tcp:HOST:PORT,unix:PATH; "+
+		"suffix an individual entry with +mgmt (e.g. unix:/run/picosignet.sock+mgmt) to allow hsm management "+
+		"commands on just that listener")
+	allowRemoteMgmt := fs.Bool("allow-remote-mgmt", false, "permit hsm management commands from network clients "+
+		"on every listener (prefer tagging one listener with +mgmt instead — see --listen)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -416,6 +435,7 @@ func cmdFactoryReset(args []string) error {
 	fs := flag.NewFlagSet("factory-reset", flag.ContinueOnError)
 	c := bindCommon(fs)
 	yes := fs.Bool("yes", false, "skip the interactive confirmation")
+	force := fs.Bool("force", false, "bypass the PIN requirement (e.g. a forgotten PIN); has no effect in dev mode or before init")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -432,7 +452,16 @@ func cmdFactoryReset(args []string) error {
 		return err
 	}
 	defer conn.Close()
-	if _, err := sendHsm(conn, &hsmproto.Request{FactoryReset: &hsmproto.Confirm{Confirm: "ERASE"}}, c.timeout); err != nil {
+
+	req := &hsmproto.FactoryResetReq{Confirm: "ERASE", Force: *force}
+	if !*force && devicePromptsForPin(conn, c.timeout) {
+		pin, err := readSecret("PIN (or re-run with --force if you've forgotten it): ")
+		if err != nil {
+			return err
+		}
+		req.Pin = pin
+	}
+	if _, err := sendHsm(conn, &hsmproto.Request{FactoryReset: req}, c.timeout); err != nil {
 		return err
 	}
 	fmt.Println("device erased")
@@ -442,6 +471,7 @@ func cmdFactoryReset(args []string) error {
 func cmdRebootBootloader(args []string) error {
 	fs := flag.NewFlagSet("reboot-bootloader", flag.ContinueOnError)
 	c := bindCommon(fs)
+	force := fs.Bool("force", false, "bypass the PIN requirement; has no effect in dev mode or before init")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -450,8 +480,17 @@ func cmdRebootBootloader(args []string) error {
 		return err
 	}
 	defer conn.Close()
+
+	req := &hsmproto.RebootBootloader{Force: *force}
+	if !*force && devicePromptsForPin(conn, c.timeout) {
+		pin, err := readSecret("PIN (or re-run with --force if you've forgotten it): ")
+		if err != nil {
+			return err
+		}
+		req.Pin = pin
+	}
 	// The device acks, then resets into BOOTSEL ~80ms later and disconnects.
-	if _, err := sendHsm(conn, &hsmproto.Request{RebootBootloader: &hsmproto.Empty{}}, c.timeout); err != nil {
+	if _, err := sendHsm(conn, &hsmproto.Request{RebootBootloader: req}, c.timeout); err != nil {
 		return err
 	}
 	fmt.Println("rebooting into BOOTSEL; the device will appear as the RPI-RP2 drive")
