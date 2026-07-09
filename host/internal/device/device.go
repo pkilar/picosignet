@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -70,7 +71,57 @@ func Discover() (string, error) {
 			return p.Name, nil
 		}
 	}
+	// No serial port matched. If the device is nonetheless sitting on the USB
+	// bus, the problem isn't a missing device but a missing tty: the CDC-ACM
+	// driver never bound, so distinguish that case with an actionable message.
+	if usbDeviceAttached() {
+		return "", fmt.Errorf("PicoSignet is attached to USB (%s:%s) but exposes no serial port — "+
+			"the CDC-ACM kernel driver (cdc_acm) is not bound. This usually means the kernel was "+
+			"upgraded without rebooting, or cdc_acm is not loaded. Reboot (or run 'sudo modprobe "+
+			"cdc_acm'), then retry; or pass --port explicitly", usbVID, usbPID)
+	}
 	return "", errors.New("no PicoSignet device found (set the path explicitly with --port)")
+}
+
+// sysfsUSBRoot is the Linux sysfs directory with one entry per USB device.
+// A package variable so tests can point the scan at a synthetic tree.
+var sysfsUSBRoot = "/sys/bus/usb/devices"
+
+// usbDeviceAttached reports whether a USB device advertising the PicoSignet
+// VID:PID is currently attached. It is a best-effort, Linux-only diagnostic
+// that lets Discover tell "device unplugged" apart from "device present but no
+// serial port"; on other platforms or any error it reports false so Discover
+// falls back to its generic message.
+func usbDeviceAttached() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	return sysfsHasDevice(sysfsUSBRoot, usbVID, usbPID)
+}
+
+// sysfsHasDevice scans a sysfs USB-devices tree for a device whose
+// idVendor/idProduct match vid/pid. sysfs writes these as lowercase 4-digit
+// hex with a trailing newline, so matching is trimmed and case-insensitive.
+// Only device directories carry idVendor, so the glob skips interface nodes.
+func sysfsHasDevice(root, vid, pid string) bool {
+	vidPaths, err := filepath.Glob(filepath.Join(root, "*", "idVendor"))
+	if err != nil {
+		return false
+	}
+	for _, vidPath := range vidPaths {
+		gotVID, err := os.ReadFile(vidPath)
+		if err != nil || !strings.EqualFold(strings.TrimSpace(string(gotVID)), vid) {
+			continue
+		}
+		gotPID, err := os.ReadFile(filepath.Join(filepath.Dir(vidPath), "idProduct"))
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(string(gotPID)), pid) {
+			return true
+		}
+	}
+	return false
 }
 
 // Open opens the device at path. An empty path triggers Discover.
