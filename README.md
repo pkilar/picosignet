@@ -76,10 +76,13 @@ SSH user certificates, signed by a CA whose private half is sealed in hardware.
 make test         # hsm-core unit + golden tests on the host
 make build-fw     # cross-build the RP2350 firmware (release)
 make go-test      # Go bridge/CLI vet + tests
+make go-build     # build the host picosignet CLI -> target/picosignet
+make install      # install the picosignet CLI to $GOPATH/bin (on PATH)
 make test-diff    # differential: every HSM cert == x/crypto/ssh re-marshal
 make uf2          # produce an (unsigned) UF2 for BOOTSEL flashing
 make uf2-signed   # signed UF2 + boot-key OTP JSON (production secure boot)
 make flash-uf2    # flash over picoboot (device in BOOTSEL)
+make flash-uf2-signed  # flash the SIGNED image (required after secure boot / P4)
 make flash        # flash an attached probe via probe-rs
 make hil          # full dev+prod flow on a real device (see tests/hil)
 ```
@@ -91,6 +94,10 @@ checks) `ssh-keygen`.
 ## Quick start (hardware)
 
 ```sh
+# 0. Build & install the host CLI (puts `picosignet` on your PATH via $GOPATH/bin;
+#    or run `make go-build` and invoke ./target/picosignet instead).
+make install
+
 # 1. Flash the firmware (BOOTSEL: hold BOOTSEL, plug in, copy the UF2).
 make uf2 && cp target/thumbv8m.main-none-eabihf/release/hsm-fw.uf2 /run/media/$USER/RP2350/
 

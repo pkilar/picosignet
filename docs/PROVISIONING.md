@@ -72,7 +72,7 @@ This is a staged, partially **irreversible** process driven by
 board, so the script gates every fuse write behind a typed confirmation.
 
 ```sh
-make keygen          # one-time secp256k1 boot key -> keys/picosignet-boot.pem
+make keygen          # one-time secp256k1 boot key -> keys/PicoSignet-boot.pem
                      #   BACK IT UP OFFLINE, TWICE. After P4, losing it
                      #   permanently bricks firmware updates.
 make uf2-signed      # signed+sealed UF2 + keys/picosignet-bootkey-otp.json
