@@ -1,0 +1,22 @@
+pkgbase = picosignet-git
+	pkgdesc = Host CLI and bridge daemon for the PicoSignet RP2350 SSH certificate-signing HSM
+	pkgver = r48.996252d
+	pkgrel = 1
+	url = https://github.com/pkilar/picosignet
+	arch = x86_64
+	arch = aarch64
+	license = Apache-2.0 OR MIT
+	makedepends = go>=1.26
+	makedepends = git
+	depends = glibc
+	optdepends = picotool: firmware flashing and secure-boot/OTP provisioning (see docs/PROVISIONING.md)
+	optdepends = openssh: ssh-keygen to inspect certificates the device signs
+	provides = picosignet
+	conflicts = picosignet
+	options = !debug
+	source = git+https://github.com/pkilar/picosignet.git
+	source = 60-picosignet.rules
+	sha256sums = SKIP
+	sha256sums = 48480656cf84b684342edc4985982bb534fb18ce2d688eae11340b26ba8af49e
+
+pkgname = picosignet-git
