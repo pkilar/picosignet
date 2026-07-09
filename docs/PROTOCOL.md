@@ -150,8 +150,7 @@ armed), `secureBoot` (bootrom signed-boot enforcement burned), `glitchReset`
 
 `ERR_BAD_REQUEST`, `ERR_ALREADY_INIT`, `ERR_NOT_INIT`, `ERR_NO_KEY`,
 `ERR_KEY_EXISTS`, `ERR_LOCKED`, `ERR_BAD_PIN`, `ERR_LOCKED_OUT`,
-`ERR_CLOCK_UNSET`, `ERR_BAD_MODE`, `ERR_ENTROPY`, `ERR_FLASH`, `ERR_OVERSIZE`,
-`ERR_BUSY`, `ERR_INTERNAL`.
+`ERR_BAD_MODE`, `ERR_ENTROPY`, `ERR_FLASH`, `ERR_BUSY`, `ERR_INTERNAL`.
 
 ## Status LED
 

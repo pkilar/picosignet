@@ -10,7 +10,7 @@
 #   P2  burn the boot-key hash: BOOTKEY0 + BOOT_FLAGS1.KEY_VALID  [IRREVERSIBLE]
 #   P3  power-cycle check: signed image still boots               (reversible)
 #   P4  burn CRIT1.SECURE_BOOT_ENABLE                  [IRREVERSIBLE — point of
-#       no return: only images signed with keys/picosignet-boot.pem will ever boot]
+#       no return: only images signed with keys/PicoSignet-boot.pem will ever boot]
 #   P5  optional hardening, each gated separately                 [IRREVERSIBLE]
 #
 # Run each stage explicitly:  scripts/provision_production.sh <P1|P2|P3|P4|P5>
@@ -25,7 +25,7 @@
 #   * P4/P5 skip fuses that are already set. Unreadable state fails closed on the
 #     irreversible stages.
 #
-# Prerequisites: make keygen && make uf2-signed; keys/picosignet-boot.pem backed up
+# Prerequisites: make keygen && make uf2-signed; keys/PicoSignet-boot.pem backed up
 # OFFLINE, TWICE — after P4, losing it permanently bricks firmware updates.
 set -euo pipefail
 
@@ -170,7 +170,7 @@ P4)
     fi
     echo "Precondition OK: a valid boot key is present (KEY_VALID = set)."
     echo "P4 is the POINT OF NO RETURN. After this burn:"
-    echo "  - only images signed with keys/picosignet-boot.pem will boot"
+    echo "  - only images signed with keys/PicoSignet-boot.pem will boot"
     echo "  - losing that key means the device can never be updated again"
     echo "Do NOT proceed unless P1-P3 passed and the key is backed up offline."
     gate P4 "enable secure boot (CRIT1.SECURE_BOOT_ENABLE)"

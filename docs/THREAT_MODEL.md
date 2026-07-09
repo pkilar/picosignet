@@ -132,7 +132,7 @@ so only firmware signed with the project boot key ever runs (see
 
 - The provisioning workstation is trusted at `init`/`generateKey` time (it sees
   the PIN you type and the CA public key, never the private key).
-- The boot signing key (`keys/picosignet-boot.pem`) is generated and stored
+- The boot signing key (`keys/PicoSignet-boot.pem`) is generated and stored
   offline; after the P4 burn it is the root of the device's code-integrity
   story (and losing it bricks updates).
 - The USB host is trusted to the extent that it can request signatures; it is
