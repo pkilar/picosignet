@@ -167,6 +167,22 @@ API at the bridge instead. In order of preference:
 
 Only enable `--allow-remote-mgmt` if you deliberately want provisioning over the
 network; by default, `init`/`unlock`/`generateKey`/etc. are local-CLI only.
+`--allow-remote-mgmt` applies to *every* listener the bridge process serves —
+if you run a bridge with both a locally-trusted socket and a network-facing
+one, enabling it to reach the local socket also opens management on the
+network one. Prefer tagging just the listener that needs it instead, with a
+`+mgmt` suffix on that entry in `--listen`:
+
+```sh
+# Management allowed only on the local unix socket; the network-facing vsock
+# listener stays signer-only even though the process serves both.
+picosignet bridge --listen unix:/run/picosignet.sock+mgmt,vsock:5000
+```
+
+`factory-reset` and `reboot-bootloader` on a production device now require the
+PIN (or `--force`, for a forgotten PIN) the same way `unlock` does — a locked
+device is no longer destroyable, or forceable into the bootloader for
+reflashing, by USB/physical access alone.
 
 ## 4. Verify end-to-end
 

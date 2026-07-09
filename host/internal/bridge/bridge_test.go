@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -93,26 +94,52 @@ func (s *simConn) provisionDev(t *testing.T) {
 // startBridge runs a bridge over a unix socket and returns its path.
 func startBridge(t *testing.T, conn *simConn, allowRemoteMgmt bool) string {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "PicoSignet.sock")
+	socks := startBridgeListeners(t, conn, allowRemoteMgmt, []string{"unix:" + newSockPath(t)})
+	return socks[0]
+}
+
+// startBridgeListeners runs a bridge over one or more unix-socket listeners,
+// each described by a "unix:<path>" spec (optionally with a "+mgmt" suffix,
+// which startBridgeMgmt below appends), and returns the socket paths in the
+// same order.
+func startBridgeListeners(t *testing.T, conn *simConn, allowRemoteMgmt bool, specs []string) []string {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		_ = Run(ctx, conn, Options{Listen: []string{"unix:" + sock}, AllowRemoteMgmt: allowRemoteMgmt})
+		_ = Run(ctx, conn, Options{Listen: specs, AllowRemoteMgmt: allowRemoteMgmt})
 		close(done)
 	}()
 	t.Cleanup(func() {
 		cancel()
 		<-done
 	})
-	// Wait for the socket to appear.
+	var socks []string
+	for _, spec := range specs {
+		raw, _ := strings.CutSuffix(spec, "+mgmt")
+		_, path, _ := strings.Cut(raw, ":")
+		socks = append(socks, path)
+	}
+	for _, sock := range socks {
+		waitForSocket(t, sock)
+	}
+	return socks
+}
+
+func newSockPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "PicoSignet.sock")
+}
+
+func waitForSocket(t *testing.T, sock string) {
+	t.Helper()
 	for i := 0; i < 100; i++ {
 		if _, err := os.Stat(sock); err == nil {
-			return sock
+			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("bridge socket never appeared")
-	return ""
+	t.Fatalf("bridge socket %q never appeared", sock)
 }
 
 func dialAndExchange(t *testing.T, sock string, req []byte) []byte {
@@ -224,6 +251,44 @@ func TestBridgeAllowsManagementWhenEnabled(t *testing.T) {
 	raw := dialAndExchange(t, sock, []byte(`{"hsm":{"status":{}}}`))
 	if !contains(raw, []byte(`"state"`)) {
 		t.Fatalf("expected a status response, got %q", raw)
+	}
+}
+
+func TestBridgeListenerMgmtSuffixAllowsManagement(t *testing.T) {
+	sim := newSimConn(t)
+	sim.provisionDev(t)
+	// AllowRemoteMgmt is off; only the listener's own "+mgmt" tag should open it.
+	socks := startBridgeListeners(t, sim, false, []string{"unix:" + newSockPath(t) + "+mgmt"})
+
+	raw := dialAndExchange(t, socks[0], []byte(`{"hsm":{"status":{}}}`))
+	if !contains(raw, []byte(`"state"`)) {
+		t.Fatalf("expected a status response from the +mgmt listener, got %q", raw)
+	}
+}
+
+func TestBridgeListenerMgmtSuffixDoesNotLeakToOtherListeners(t *testing.T) {
+	sim := newSimConn(t)
+	sim.provisionDev(t)
+	// Regression test: tagging one listener "+mgmt" must not open management
+	// on a second, untagged listener in the same bridge process.
+	mgmtSock := "unix:" + newSockPath(t) + "+mgmt"
+	plainSock := "unix:" + newSockPath(t)
+	socks := startBridgeListeners(t, sim, false, []string{mgmtSock, plainSock})
+
+	raw := dialAndExchange(t, socks[0], []byte(`{"hsm":{"status":{}}}`))
+	if !contains(raw, []byte(`"state"`)) {
+		t.Fatalf("expected a status response from the +mgmt listener, got %q", raw)
+	}
+
+	var resp struct {
+		Error string `json:"error"`
+	}
+	raw = dialAndExchange(t, socks[1], []byte(`{"hsm":{"status":{}}}`))
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != "management commands are not permitted over the network" {
+		t.Fatalf("expected the untagged listener to still firewall management, got %q", raw)
 	}
 }
 

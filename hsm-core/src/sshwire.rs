@@ -230,33 +230,46 @@ pub fn parse_authorized_key(input: &str) -> Result<ParsedKey, KeyError> {
 
 /// Parse the type-specific fields to extract validation parameters. `r` is
 /// positioned just after the algorithm name.
+///
+/// Every arm must fully consume `r`: the blob's type-specific tail becomes
+/// [`ParsedKey::key_body`], which splices *raw* into the certificate we sign
+/// (see `cert::build_certificate`). Without this check, a blob with a
+/// well-formed key followed by arbitrary extra bytes would be accepted and
+/// those extra bytes spliced into a CA-signed structure — where
+/// `x/crypto/ssh.ParsePublicKey` (what cerberus uses) explicitly rejects
+/// trailing junk. Checked once, uniformly, after the match, so every key kind
+/// gets the same guarantee.
 fn parse_key_kind(algo: &str, r: &mut Reader<'_>) -> Result<KeyKind, KeyError> {
-    match algo {
+    let kind = match algo {
         "ssh-ed25519" => {
             let pk = r.read_string()?;
             if pk.len() != 32 {
                 return Err(KeyError::Rejected("malformed ed25519 key".to_string()));
             }
-            Ok(KeyKind::Ed25519)
+            KeyKind::Ed25519
         }
         "ssh-rsa" => {
             let _e = r.read_string()?; // public exponent
             let n = r.read_string()?; // modulus (mpint, big-endian, signed)
             let bits = mpint_bit_len(n);
-            Ok(KeyKind::Rsa { bits })
+            KeyKind::Rsa { bits }
         }
         "ecdsa-sha2-nistp256" | "ecdsa-sha2-nistp384" | "ecdsa-sha2-nistp521" => {
             let curve = r.read_string()?;
             let _q = r.read_string()?; // EC point
             match curve {
-                b"nistp256" => Ok(KeyKind::EcdsaP256),
-                b"nistp384" => Ok(KeyKind::EcdsaP384),
-                b"nistp521" => Ok(KeyKind::EcdsaP521),
-                _ => Err(KeyError::Rejected("mismatched ECDSA curve".to_string())),
+                b"nistp256" => KeyKind::EcdsaP256,
+                b"nistp384" => KeyKind::EcdsaP384,
+                b"nistp521" => KeyKind::EcdsaP521,
+                _ => return Err(KeyError::Rejected("mismatched ECDSA curve".to_string())),
             }
         }
-        _ => Err(KeyError::Parse),
+        _ => return Err(KeyError::Parse),
+    };
+    if !r.is_empty() {
+        return Err(KeyError::Trailing);
     }
+    Ok(kind)
 }
 
 /// Bit length of an SSH `mpint` (two's-complement big-endian). RSA moduli are
@@ -329,6 +342,20 @@ mod tests {
         put_string(&mut blob, &[0u8; 32]);
         let b = b64_encode(&blob);
         let line = format!("ssh-ed25519 {b}\nssh-ed25519 {b}");
+        assert_eq!(parse_authorized_key(&line), Err(KeyError::Trailing));
+    }
+
+    #[test]
+    fn trailing_bytes_inside_blob_rejected() {
+        // A well-formed ed25519 key followed by extra bytes *within the same
+        // base64 blob* (not a second line) must be rejected — matching
+        // x/crypto/ssh.ParsePublicKey's "trailing junk" check — rather than
+        // silently splicing the extra bytes into a signed certificate.
+        let mut blob = Vec::new();
+        put_string(&mut blob, b"ssh-ed25519");
+        put_string(&mut blob, &[0u8; 32]);
+        blob.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        let line = format!("ssh-ed25519 {}", b64_encode(&blob));
         assert_eq!(parse_authorized_key(&line), Err(KeyError::Trailing));
     }
 

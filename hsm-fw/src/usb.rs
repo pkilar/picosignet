@@ -2,6 +2,8 @@
 //! newline-delimited JSON to the `hsm-core` dispatcher, while driving the
 //! on-board WS2812 status LED from the device state.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
@@ -32,6 +34,31 @@ bind_interrupts!(struct Irqs {
 });
 
 const PACKET: usize = 64;
+
+/// Set by [`ResetHandler`] on a USB bus reset or suspend. The protocol loop
+/// polls and clears it, re-locking a production device rather than relying
+/// only on `session()`'s own `Result` return — a suspend need not error a
+/// pending endpoint read the way a physical unplug or bus reset typically
+/// does, so a device left plugged into a suspended host could otherwise stay
+/// `ProdReady` indefinitely. `docs/THREAT_MODEL.md` and the state-machine
+/// diagram in `hsm_core::state` both document "lock / USB reset / suspend" as
+/// a re-lock trigger; this is what actually implements it.
+static RELOCK_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// `embassy_usb::Handler` that only observes bus-level reset/suspend events
+/// to flip [`RELOCK_REQUESTED`]. Registered with the `Builder` in [`run`].
+struct ResetHandler;
+
+impl embassy_usb::Handler for ResetHandler {
+    fn reset(&mut self) {
+        RELOCK_REQUESTED.store(true, Ordering::Relaxed);
+    }
+    fn suspended(&mut self, suspended: bool) {
+        if suspended {
+            RELOCK_REQUESTED.store(true, Ordering::Relaxed);
+        }
+    }
+}
 
 /// Build the USB device + status LED and run them with the protocol loop.
 pub async fn run(_spawner: Spawner, p: Peripherals) {
@@ -68,6 +95,10 @@ pub async fn run(_spawner: Spawner, p: Peripherals) {
     );
 
     let mut class = CdcAcmClass::new(&mut builder, STATE.init(State::new()), PACKET as u16);
+
+    static RESET_HANDLER: StaticCell<ResetHandler> = StaticCell::new();
+    builder.handler(RESET_HANDLER.init(ResetHandler));
+
     let mut usb = builder.build();
 
     // Status LED: WS2812 on GPIO16 (PIO0/SM0, DMA0) — Waveshare RP2350-One.
@@ -108,6 +139,14 @@ pub async fn run(_spawner: Spawner, p: Peripherals) {
         loop {
             class.wait_connection().await;
             let _ = session(&mut class, &mut hsm, &mut led).await;
+            // The connection just dropped for some reason (unplug, bus reset,
+            // an I/O error) — a production device must not stay unlocked once
+            // the host that unlocked it is gone. Also clear the flag so a
+            // suspend that fires without ever erroring `session` (handled
+            // inline inside it) doesn't leave a stale relock pending forever.
+            RELOCK_REQUESTED.store(false, Ordering::Relaxed);
+            hsm.relock_on_transport_reset();
+            led.set_state(hsm.state()).await;
         }
     };
 
@@ -126,6 +165,14 @@ async fn session<'c, 't, 'f, 'l>(
         for &b in &packet[..n] {
             match asm.push(b) {
                 Some(Event::Line(line)) => {
+                    // A suspend need not error the endpoint the way a reset or
+                    // unplug typically does, so this session might still be
+                    // "connected" per `wait_connection` — catch it here too,
+                    // before honoring the next request, rather than only
+                    // after the connection eventually drops.
+                    if RELOCK_REQUESTED.swap(false, Ordering::Relaxed) {
+                        hsm.relock_on_transport_reset();
+                    }
                     led.busy().await;
                     let resp = hsm.process_line(&line);
                     led.set_state(hsm.state()).await;

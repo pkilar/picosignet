@@ -123,7 +123,7 @@ fn validate_request(req: &EnclaveSigningRequest) -> Result<i64, String> {
         if req.permissions.contains_key(k) {
             return Err(format!(
                 "invalid request: key {} present in both permissions and custom_attributes",
-                go_quote(k)
+                crate::goduration::quote(k)
             ));
         }
     }
@@ -149,21 +149,6 @@ fn validate_public_key(kind: &KeyKind) -> Result<(), String> {
         KeyKind::EcdsaP256 | KeyKind::EcdsaP384 | KeyKind::EcdsaP521 | KeyKind::Ed25519 => {}
     }
     Ok(())
-}
-
-/// A minimal Go `%q` (strconv.Quote) for identifier-like keys.
-fn go_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            _ => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 #[cfg(test)]

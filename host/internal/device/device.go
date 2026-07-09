@@ -144,8 +144,22 @@ func (s *Serial) RoundTrip(ctx context.Context, req []byte) ([]byte, error) {
 	return resp[:len(resp)-1], nil // strip trailing newline
 }
 
-// reconnect closes and reopens the serial port, dropping any buffered or
-// in-flight bytes and clearing the poisoned flag. The caller must hold s.mu.
+// drainTimeout bounds how long reconnect waits for stale bytes to stop
+// arriving before trusting the link again.
+const drainTimeout = 100 * time.Millisecond
+
+// reconnect closes and reopens the serial port, then actively drains any
+// bytes the device emits in the following window before clearing the
+// poisoned flag. The caller must hold s.mu.
+//
+// Reopening the OS handle does not by itself guarantee a clean slate: the
+// underlying serial library issues no explicit flush, and a still-in-flight
+// device write (e.g. a response to the request the previous, poisoned
+// exchange gave up on) can land on the newly reopened port moments later,
+// where it would otherwise be misdelivered as the answer to an unrelated
+// subsequent request. Draining here is defense-in-depth alongside the
+// device-side fix (the firmware no longer blocks a response on PIN backoff,
+// which was the main way a reply could arrive this late).
 func (s *Serial) reconnect() error {
 	if s.port != nil {
 		_ = s.port.Close()
@@ -154,6 +168,7 @@ func (s *Serial) reconnect() error {
 	if err != nil {
 		return fmt.Errorf("reopening %s: %w", s.path, err)
 	}
+	drainStale(port)
 	if err := port.SetReadTimeout(s.timeout); err != nil {
 		_ = port.Close()
 		return fmt.Errorf("setting read timeout: %w", err)
@@ -162,6 +177,20 @@ func (s *Serial) reconnect() error {
 	s.r = bufio.NewReaderSize(timeoutReader{port}, 4096)
 	s.poisoned = false
 	return nil
+}
+
+// drainStale reads and discards bytes until drainTimeout passes with none
+// arriving, or a real read error occurs. Best-effort — it cannot prove the
+// link is clean, only reduce the odds of a stale response surviving.
+func drainStale(port serial.Port) {
+	_ = port.SetReadTimeout(drainTimeout)
+	buf := make([]byte, 256)
+	for {
+		n, err := port.Read(buf)
+		if err != nil || n == 0 {
+			return
+		}
+	}
 }
 
 // Close closes the underlying port.

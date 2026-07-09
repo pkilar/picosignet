@@ -89,6 +89,14 @@ impl Drbg {
 
     /// Mix host-supplied entropy into the pool. Additive hardening only — the
     /// host bytes are never the sole source of randomness.
+    ///
+    /// Deliberately does *not* set `self.seeded = true`. Doing so would let a
+    /// device whose hardware TRNG has never passed a health check (`seed()`
+    /// never succeeded) be tricked into treating itself as cryptographically
+    /// seeded by nothing but host-supplied bytes via `hsm.addEntropy` — which
+    /// is reachable from any state, unauthenticated. `seeded` must only ever
+    /// be set by [`Drbg::seed`], which requires fresh entropy to actually pass
+    /// the repetition-count/adaptive-proportion checks first.
     pub fn mix_host(&mut self, host: &[u8]) {
         let mut cur = [0u8; 32];
         self.rng.fill_bytes(&mut cur);
