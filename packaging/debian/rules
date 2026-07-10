@@ -1,0 +1,47 @@
+#!/usr/bin/make -f
+# Debhelper-free rules for the picosignet host CLI. Needs only dpkg-dev and a
+# Go toolchain (>= 1.26); it deliberately avoids debhelper so it builds on any
+# host with Go, not just one with a matching debhelper-compat installed.
+
+PKG    := picosignet
+DESTDIR = $(CURDIR)/debian/$(PKG)
+DOCDIR  = $(DESTDIR)/usr/share/doc/$(PKG)
+
+# Keep the Go build tree inside debian/ so `clean` removes every artifact.
+export GOPATH      = $(CURDIR)/debian/_build/gopath
+export GOCACHE     = $(CURDIR)/debian/_build/gocache
+export GOFLAGS     = -trimpath -mod=readonly
+export GO111MODULE = on
+
+clean:
+	rm -rf debian/$(PKG) debian/_build debian/files debian/*.substvars picosignet
+
+build: build-arch build-indep
+build-indep:
+build-arch:
+	cd host && go build -buildmode=pie -o ../picosignet ./cmd/picosignet
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	cd host && go vet ./... && go test ./...
+endif
+
+binary: binary-arch binary-indep
+binary-indep:
+binary-arch: build-arch
+	install -Dm755 picosignet $(DESTDIR)/usr/bin/picosignet
+	# udev rule (shared with the Arch package — one source of truth).
+	install -Dm644 packaging/60-picosignet.rules \
+		$(DESTDIR)/lib/udev/rules.d/60-picosignet.rules
+	# Copyright, Debian changelog, and docs.
+	install -Dm644 debian/copyright $(DOCDIR)/copyright
+	install -Dm644 debian/changelog $(DOCDIR)/changelog.Debian
+	gzip -9n $(DOCDIR)/changelog.Debian
+	install -Dm644 README.md $(DOCDIR)/README.md
+	set -e; for f in docs/*.md; do \
+		install -Dm644 "$$f" "$(DOCDIR)/$$(basename $$f)"; \
+	done
+	# Control metadata + .deb assembly (root-owned, no fakeroot needed).
+	install -d $(DESTDIR)/DEBIAN
+	dpkg-gencontrol -p$(PKG) -P$(DESTDIR)
+	dpkg-deb --root-owner-group --build $(DESTDIR) ..
+
+.PHONY: clean build build-arch build-indep binary binary-arch binary-indep
