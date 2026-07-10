@@ -19,9 +19,27 @@ The udev rule is shared: both `PKGBUILD` and `debian/rules` install the single
 
 | Path                   | Purpose                                                       |
 | ---------------------- | ------------------------------------------------------------- |
+| `build-arch.sh`        | One-command Arch build → `dist/*.pkg.tar.zst`.                |
+| `build-deb.sh`         | One-command Debian build → `dist/*.deb`.                      |
 | `PKGBUILD` / `.SRCINFO`| Arch Linux (`makepkg`) package.                               |
 | `debian/`              | Debian/Ubuntu (`dpkg-buildpackage`) package.                  |
 | `60-picosignet.rules`  | udev rule, shared by both packages.                           |
+
+## Building
+
+The quickest path is the per-distro build scripts, which produce finished
+packages in `packaging/dist/` (gitignored) and clean up all intermediate build
+artifacts:
+
+```sh
+packaging/build-arch.sh          # -> packaging/dist/picosignet-git-*.pkg.tar.zst
+packaging/build-deb.sh           # -> packaging/dist/picosignet_*.deb
+```
+
+Both run `go vet`/`go test` and build a hardened (PIE, `-trimpath`) binary.
+Extra flags pass through — `packaging/build-arch.sh --nocheck`, or
+`DEB_BUILD_OPTIONS=nocheck packaging/build-deb.sh` — to skip the test phase. The
+sections below cover the equivalent manual invocations.
 
 ## Arch Linux
 

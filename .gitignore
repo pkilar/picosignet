@@ -18,3 +18,13 @@ Cargo.lock.bak
 
 # Boot-signing material (production secure boot) — never commit
 /keys/
+
+# Packaging build artifacts (produced by packaging/build-*.sh)
+/packaging/dist/
+/packaging/src/
+/packaging/pkg/
+/packaging/picosignet/
+/packaging/debian/_build/
+/packaging/debian/picosignet/
+/packaging/debian/files
+/debian
