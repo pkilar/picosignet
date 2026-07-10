@@ -13,6 +13,9 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
+use p256::PublicKey as P256PublicKey;
+use p384::PublicKey as P384PublicKey;
+use p521::PublicKey as P521PublicKey;
 
 /// Append a `uint32` in SSH (big-endian) order.
 pub fn put_u32(out: &mut Vec<u8>, v: u32) {
@@ -249,20 +252,49 @@ fn parse_key_kind(algo: &str, r: &mut Reader<'_>) -> Result<KeyKind, KeyError> {
             KeyKind::Ed25519
         }
         "ssh-rsa" => {
-            let _e = r.read_string()?; // public exponent
-            let n = r.read_string()?; // modulus (mpint, big-endian, signed)
-            let bits = mpint_bit_len(n);
+            let e = positive_mpint_u64(r.read_string()?)
+                .ok_or_else(|| KeyError::Rejected("malformed RSA public exponent".to_string()))?;
+            if e < 3 || e % 2 == 0 {
+                return Err(KeyError::Rejected(
+                    "RSA public exponent must be an odd integer >= 3".to_string(),
+                ));
+            }
+            let bits = positive_mpint_bit_len(r.read_string()?)
+                .ok_or_else(|| KeyError::Rejected("malformed RSA modulus".to_string()))?;
             KeyKind::Rsa { bits }
         }
-        "ecdsa-sha2-nistp256" | "ecdsa-sha2-nistp384" | "ecdsa-sha2-nistp521" => {
+        "ecdsa-sha2-nistp256" => {
             let curve = r.read_string()?;
-            let _q = r.read_string()?; // EC point
-            match curve {
-                b"nistp256" => KeyKind::EcdsaP256,
-                b"nistp384" => KeyKind::EcdsaP384,
-                b"nistp521" => KeyKind::EcdsaP521,
-                _ => return Err(KeyError::Rejected("mismatched ECDSA curve".to_string())),
+            let q = r.read_string()?;
+            if curve != b"nistp256" {
+                return Err(KeyError::Rejected("mismatched ECDSA curve".to_string()));
             }
+            require_uncompressed_sec1(q, 65)?;
+            P256PublicKey::from_sec1_bytes(q)
+                .map_err(|_| KeyError::Rejected("invalid ECDSA public point".to_string()))?;
+            KeyKind::EcdsaP256
+        }
+        "ecdsa-sha2-nistp384" => {
+            let curve = r.read_string()?;
+            let q = r.read_string()?;
+            if curve != b"nistp384" {
+                return Err(KeyError::Rejected("mismatched ECDSA curve".to_string()));
+            }
+            require_uncompressed_sec1(q, 97)?;
+            P384PublicKey::from_sec1_bytes(q)
+                .map_err(|_| KeyError::Rejected("invalid ECDSA public point".to_string()))?;
+            KeyKind::EcdsaP384
+        }
+        "ecdsa-sha2-nistp521" => {
+            let curve = r.read_string()?;
+            let q = r.read_string()?;
+            if curve != b"nistp521" {
+                return Err(KeyError::Rejected("mismatched ECDSA curve".to_string()));
+            }
+            require_uncompressed_sec1(q, 133)?;
+            P521PublicKey::from_sec1_bytes(q)
+                .map_err(|_| KeyError::Rejected("invalid ECDSA public point".to_string()))?;
+            KeyKind::EcdsaP521
         }
         _ => return Err(KeyError::Parse),
     };
@@ -272,27 +304,56 @@ fn parse_key_kind(algo: &str, r: &mut Reader<'_>) -> Result<KeyKind, KeyError> {
     Ok(kind)
 }
 
-/// Bit length of an SSH `mpint` (two's-complement big-endian). RSA moduli are
-/// positive, so a leading `0x00` pad byte (present when the high bit is set) is
-/// skipped before counting.
-fn mpint_bit_len(bytes: &[u8]) -> u32 {
-    // Strip leading zero bytes (sign padding and any incidental zeros).
-    let mut i = 0;
-    while i < bytes.len() && bytes[i] == 0 {
-        i += 1;
+/// SSH ECDSA keys carry an uncompressed SEC1 point. Curve decoders also accept
+/// compressed points, but preserving one in a signed certificate would produce
+/// an encoding OpenSSH and x/crypto/ssh reject.
+fn require_uncompressed_sec1(q: &[u8], expected_len: usize) -> Result<(), KeyError> {
+    if q.len() != expected_len || q.first() != Some(&0x04) {
+        return Err(KeyError::Rejected(
+            "ECDSA public point must use uncompressed SEC1 encoding".to_string(),
+        ));
     }
-    let mag = &bytes[i..];
-    if mag.is_empty() {
-        return 0;
+    Ok(())
+}
+
+/// Return a canonical positive SSH `mpint` magnitude. RSA parameters are
+/// positive signed values, so only one leading zero is permitted, and only as
+/// required sign padding for a magnitude whose high bit is set.
+fn positive_mpint_magnitude(bytes: &[u8]) -> Option<&[u8]> {
+    if bytes.is_empty() || bytes[0] & 0x80 != 0 {
+        return None;
     }
-    let top = mag[0];
-    let top_bits = 8 - top.leading_zeros(); // 1..=8
-    (mag.len() as u32 - 1) * 8 + top_bits
+    if bytes[0] == 0 {
+        if bytes.len() == 1 || bytes[1] & 0x80 == 0 {
+            return None;
+        }
+        return Some(&bytes[1..]);
+    }
+    Some(bytes)
+}
+
+fn positive_mpint_u64(bytes: &[u8]) -> Option<u64> {
+    let magnitude = positive_mpint_magnitude(bytes)?;
+    if magnitude.len() > 8 {
+        return None;
+    }
+    Some(
+        magnitude
+            .iter()
+            .fold(0u64, |value, &byte| (value << 8) | byte as u64),
+    )
+}
+
+fn positive_mpint_bit_len(bytes: &[u8]) -> Option<u32> {
+    let magnitude = positive_mpint_magnitude(bytes)?;
+    let top_bits = 8 - magnitude[0].leading_zeros();
+    Some((magnitude.len() as u32 - 1) * 8 + top_bits)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
 
     #[test]
     fn put_string_frames_length() {
@@ -302,13 +363,146 @@ mod tests {
     }
 
     #[test]
-    fn mpint_bit_len_handles_padding() {
-        // 0x00 0xFF -> 8 bits (leading pad stripped).
-        assert_eq!(mpint_bit_len(&[0x00, 0xFF]), 8);
-        // 0x01 0x00 -> 9 bits.
-        assert_eq!(mpint_bit_len(&[0x01, 0x00]), 9);
-        // empty / zero -> 0.
-        assert_eq!(mpint_bit_len(&[0x00]), 0);
+    fn positive_mpint_validation_rejects_noncanonical_values() {
+        assert_eq!(positive_mpint_bit_len(&[0x00, 0xFF]), Some(8));
+        assert_eq!(positive_mpint_bit_len(&[0x01, 0x00]), Some(9));
+        assert_eq!(positive_mpint_bit_len(&[]), None);
+        assert_eq!(positive_mpint_bit_len(&[0x00]), None);
+        assert_eq!(positive_mpint_bit_len(&[0x00, 0x7F]), None);
+        assert_eq!(positive_mpint_bit_len(&[0x80]), None);
+    }
+
+    fn rsa_line(exponent: &[u8]) -> String {
+        let mut blob = Vec::new();
+        put_string(&mut blob, b"ssh-rsa");
+        put_string(&mut blob, exponent);
+        put_string(&mut blob, &[1, 0, 1]);
+        format!("ssh-rsa {}", b64_encode(&blob))
+    }
+
+    fn ecdsa_line(algo: &str, curve: &[u8], point: &[u8]) -> String {
+        let mut blob = Vec::new();
+        put_string(&mut blob, algo.as_bytes());
+        put_string(&mut blob, curve);
+        put_string(&mut blob, point);
+        format!("{algo} {}", b64_encode(&blob))
+    }
+
+    #[test]
+    fn rsa_rejects_invalid_public_exponents() {
+        for exponent in [
+            &[][..],
+            &[0][..],
+            &[1][..],
+            &[4][..],
+            &[0x80][..],
+            &[0, 3][..],
+        ] {
+            assert!(matches!(
+                parse_authorized_key(&rsa_line(exponent)),
+                Err(KeyError::Rejected(_))
+            ));
+        }
+        assert!(parse_authorized_key(&rsa_line(&[1, 0, 1])).is_ok());
+    }
+
+    #[test]
+    fn ecdsa_rejects_curve_mismatch_and_invalid_point() {
+        let mut mismatch = Vec::new();
+        put_string(&mut mismatch, b"ecdsa-sha2-nistp256");
+        put_string(&mut mismatch, b"nistp384");
+        put_string(&mut mismatch, &[4; 65]);
+        assert!(matches!(
+            parse_authorized_key(&format!("ecdsa-sha2-nistp256 {}", b64_encode(&mismatch))),
+            Err(KeyError::Rejected(_))
+        ));
+
+        let mut invalid = Vec::new();
+        put_string(&mut invalid, b"ecdsa-sha2-nistp256");
+        put_string(&mut invalid, b"nistp256");
+        put_string(&mut invalid, &[4; 65]);
+        assert!(matches!(
+            parse_authorized_key(&format!("ecdsa-sha2-nistp256 {}", b64_encode(&invalid))),
+            Err(KeyError::Rejected(_))
+        ));
+    }
+
+    #[test]
+    fn ecdsa_rejects_compressed_sec1_points() {
+        let mut p256_scalar = [0u8; 32];
+        p256_scalar[31] = 1;
+        let p256_point = p256::SecretKey::from_slice(&p256_scalar)
+            .unwrap()
+            .public_key()
+            .to_encoded_point(true);
+        let mut p384_scalar = [0u8; 48];
+        p384_scalar[47] = 1;
+        let p384_point = p384::SecretKey::from_slice(&p384_scalar)
+            .unwrap()
+            .public_key()
+            .to_encoded_point(true);
+        let mut p521_scalar = [0u8; 66];
+        p521_scalar[65] = 1;
+        let p521_point = p521::SecretKey::from_slice(&p521_scalar)
+            .unwrap()
+            .public_key()
+            .to_encoded_point(true);
+
+        for line in [
+            ecdsa_line("ecdsa-sha2-nistp256", b"nistp256", p256_point.as_bytes()),
+            ecdsa_line("ecdsa-sha2-nistp384", b"nistp384", p384_point.as_bytes()),
+            ecdsa_line("ecdsa-sha2-nistp521", b"nistp521", p521_point.as_bytes()),
+        ] {
+            assert!(matches!(
+                parse_authorized_key(&line),
+                Err(KeyError::Rejected(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn valid_supported_ecdsa_keys_parse() {
+        // SEC1 uncompressed encoding of the NIST P-256 generator.
+        let point = [
+            4, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4,
+            0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39, 0x45,
+            0xd8, 0x98, 0xc2, 0x96, 0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e, 0xe7,
+            0xeb, 0x4a, 0x7c, 0x0f, 0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce,
+            0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5,
+        ];
+        let mut p256_scalar = [0u8; 32];
+        p256_scalar[31] = 1;
+        let p256_point = p256::SecretKey::from_slice(&p256_scalar)
+            .unwrap()
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+        assert_eq!(p256_point.as_slice(), &point);
+        let mut p384_scalar = [0u8; 48];
+        p384_scalar[47] = 1;
+        let p384_point = p384::SecretKey::from_slice(&p384_scalar)
+            .unwrap()
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+        let mut p521_scalar = [0u8; 66];
+        p521_scalar[65] = 1;
+        let p521_point = p521::SecretKey::from_slice(&p521_scalar)
+            .unwrap()
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+
+        for (algo, curve, point) in [
+            ("ecdsa-sha2-nistp256", b"nistp256".as_slice(), p256_point),
+            ("ecdsa-sha2-nistp384", b"nistp384".as_slice(), p384_point),
+            ("ecdsa-sha2-nistp521", b"nistp521".as_slice(), p521_point),
+        ] {
+            assert!(parse_authorized_key(&ecdsa_line(algo, curve, &point)).is_ok());
+        }
     }
 
     #[test]

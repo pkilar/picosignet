@@ -62,26 +62,20 @@ type AddEntropy struct {
 	Hex string `json:"hex"`
 }
 
-// FactoryResetReq erases the CA key and all config. A prodLocked/prodReady
-// device requires Pin (verified with the same tick/backoff/lockout accounting
-// as Unlock) unless Force is set — the "I forgot my PIN" escape hatch. A
-// lockedOut device only ever accepts Force: the device never verifies a PIN
-// once the retry budget is exhausted, so this can't become a second guessing
-// oracle.
+// FactoryResetReq erases the CA key and all config. A production device
+// requires Pin unless firmware latched the physical recovery strap at boot.
+// A lockedOut device accepts only that physical recovery path.
 type FactoryResetReq struct {
 	Confirm string `json:"confirm"`
 	Pin     string `json:"pin,omitempty"`
-	Force   bool   `json:"force,omitempty"`
 }
 
 // RebootBootloader resets the device into the USB bootloader for reflashing.
 // Gated the same way as FactoryResetReq: free before the device is ever
-// initialized or in dev mode, otherwise Pin or Force is required — a
-// pre-secure-boot-burn device accepts arbitrary firmware over this same USB
-// connection once in the bootloader.
+// initialized or in dev mode, otherwise Pin is required unless firmware
+// latched physical recovery at boot.
 type RebootBootloader struct {
-	Pin   string `json:"pin,omitempty"`
-	Force bool   `json:"force,omitempty"`
+	Pin string `json:"pin,omitempty"`
 }
 
 // Response is the device's reply envelope. Only the matching field is set; on

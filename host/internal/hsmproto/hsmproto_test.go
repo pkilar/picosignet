@@ -1,6 +1,9 @@
 package hsmproto
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestIsManagementLine(t *testing.T) {
 	cases := []struct {
@@ -19,6 +22,21 @@ func TestIsManagementLine(t *testing.T) {
 	for _, tc := range cases {
 		if got := IsManagementLine([]byte(tc.line)); got != tc.want {
 			t.Errorf("IsManagementLine(%q) = %t, want %t", tc.line, got, tc.want)
+		}
+	}
+}
+
+func TestRecoveryRequestsDoNotMarshalForce(t *testing.T) {
+	for _, r := range []*Request{
+		{FactoryReset: &FactoryResetReq{Confirm: "ERASE"}},
+		{RebootBootloader: &RebootBootloader{}},
+	} {
+		b, err := r.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "force") {
+			t.Fatalf("recovery request unexpectedly contains force: %s", b)
 		}
 	}
 }

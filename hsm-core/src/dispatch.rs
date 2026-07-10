@@ -88,6 +88,17 @@ pub struct Hsm<E: EntropySource, M: Monotonic, F: FlashStore> {
     /// The Argon2 salt matching `wrap_kek` (prod only), so `generateKey` can
     /// re-wrap a rotated seed into a self-consistent blob without the PIN.
     wrap_salt: Option<[u8; 16]>,
+    /// Absolute monotonic deadline for the next PIN attempt. Failures in this
+    /// boot set it relative to their actual time; boot reconstructs it from
+    /// the persisted counter so a reset cannot skip a pending delay.
+    pin_backoff_until_ms: u64,
+    /// Cross-reboot lower trust anchor for wall-clock validation.
+    trusted_time_floor: Option<i64>,
+    /// Set when the persistent trusted-time state could not be read or decoded.
+    /// `setTime` fails closed until a clean boot or successful factory reset.
+    trusted_time_floor_unavailable: bool,
+    /// Physical recovery capability sampled once by firmware during boot.
+    physical_recovery_authorized: bool,
     /// Firmware-reported free heap (0 when unknown, e.g. in the simulator).
     heap_free: u64,
     /// Firmware-reported security posture (all false in the simulator):
@@ -120,6 +131,10 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             ca_pubkey: None,
             wrap_kek: None,
             wrap_salt: None,
+            pin_backoff_until_ms: 0,
+            trusted_time_floor: None,
+            trusted_time_floor_unavailable: false,
+            physical_recovery_authorized: false,
             heap_free: 0,
             glitch_armed: false,
             secure_boot: false,
@@ -134,6 +149,12 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     /// sending each response; returns true exactly once per request).
     pub fn take_reboot_requested(&mut self) -> bool {
         core::mem::replace(&mut self.reboot_requested, false)
+    }
+
+    /// Latch the physical recovery gesture sampled by firmware during boot.
+    /// This capability must never be derived from a wire request.
+    pub fn set_physical_recovery_authorized(&mut self, authorized: bool) {
+        self.physical_recovery_authorized = authorized;
     }
 
     /// Update the firmware's free-heap figure (surfaced in metrics/status).
@@ -186,6 +207,26 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             .ok()
             .flatten()
             .and_then(|b| KeyBlob::from_bytes(&b));
+        match storage::TIME_FLOOR.read_latest_fail_closed(&mut self.flash) {
+            Ok(Some(bytes)) => match <[u8; 8]>::try_from(bytes.as_slice()) {
+                Ok(encoded) => {
+                    self.trusted_time_floor = Some(i64::from_be_bytes(encoded));
+                    self.trusted_time_floor_unavailable = false;
+                }
+                Err(_) => {
+                    self.trusted_time_floor = None;
+                    self.trusted_time_floor_unavailable = true;
+                }
+            },
+            Ok(None) => {
+                self.trusted_time_floor = None;
+                self.trusted_time_floor_unavailable = false;
+            }
+            Err(_) => {
+                self.trusted_time_floor = None;
+                self.trusted_time_floor_unavailable = true;
+            }
+        }
         self.ca_pubkey = keyblob.as_ref().map(|kb| kb.pubkey);
         // The salt lives in the key blob (v2); a cached KEK is only meaningful
         // alongside it. Both are re-established below per mode.
@@ -197,12 +238,14 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 self.state = DeviceState::Uninitialized;
                 self.ca = None;
                 self.wrap_kek = None;
+                self.pin_backoff_until_ms = 0;
             }
             Some(c) => {
                 self.config = Some(c);
                 match c.mode {
                     Mode::Dev => {
                         self.state = DeviceState::DevReady;
+                        self.pin_backoff_until_ms = 0;
                         // No OTP secret => no KEK: the device stays DevReady
                         // for status purposes but cannot load or wrap a key
                         // (fail closed; status reports otpSecret:false).
@@ -217,11 +260,18 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                         }
                     }
                     Mode::Prod => {
-                        self.ca = None;
-                        self.wrap_kek = None;
+                        self.drop_live_secrets();
                         let attempts = pin::count(&mut self.flash).unwrap_or(0);
+                        self.pin_backoff_until_ms = if attempts > 0 {
+                            (self.mono.now_micros() / 1000)
+                                .saturating_add(
+                                    pin::backoff_ms(attempts.saturating_sub(1) as u32) as u64
+                                )
+                        } else {
+                            0
+                        };
                         if keyblob.is_some() && attempts >= c.max_retries as usize {
-                            self.state = DeviceState::LockedOut;
+                            self.enter_locked_out();
                         } else {
                             self.state = DeviceState::ProdLocked;
                         }
@@ -294,7 +344,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     }
 
     fn handle_load_key_signer(&self) -> Response {
-        if self.ca.is_some() {
+        if self.state.signer_ready() && self.ca.is_some() {
             Response {
                 load_key_signer: Some(LoadKeySignerResponse {
                     success: true,
@@ -308,7 +358,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     }
 
     fn handle_sign(&mut self, req: EnclaveSigningRequest) -> Response {
-        if self.ca.is_none() {
+        if !self.state.signer_ready() || self.ca.is_none() {
             return Response::error("CA signer is not initialized; call LoadKeySigner first");
         }
         let now = match self.clock.now_unix(&self.mono) {
@@ -419,16 +469,13 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     /// Gated the same way as [`Self::hsm_factory_reset`]: free from
     /// `Uninitialized`/`DevReady` (nothing to protect — a fresh board must be
     /// reboot-able before it's ever initialized, and dev mode has no PIN by
-    /// design), but a `prodLocked`/`prodReady`/`lockedOut` device requires
-    /// proof of PIN knowledge or an explicit `force`. Before the production
-    /// secure-boot burn, PICOBOOT accepts arbitrary firmware over this same
-    /// USB connection once in the bootloader — so forcing a device there is
-    /// not just a denial-of-service, it can reopen the malicious-reflash
-    /// window the PIN is supposed to gate.
+    /// design), but a production device requires proof of PIN knowledge or the
+    /// boot-latched physical recovery gesture. A locked-out device accepts
+    /// only the physical gesture and never another PIN guess.
     fn hsm_reboot_bootloader(&mut self, req: RebootBootloaderReq) -> HsmResponse {
         match self.state {
             DeviceState::ProdLocked | DeviceState::ProdReady => {
-                if !req.force {
+                if !self.physical_recovery_authorized {
                     match &req.pin {
                         Some(pin) => {
                             if let Err(resp) = self.verify_pin(pin) {
@@ -438,7 +485,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                         None => {
                             return HsmResponse::err(
                                 ERR_BAD_REQUEST,
-                                "rebooting into the bootloader requires \"pin\" or \"force\":true in prod mode",
+                                "rebooting into the bootloader requires a PIN or physical recovery held low during reset",
                             )
                         }
                     }
@@ -447,10 +494,10 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             DeviceState::LockedOut => {
                 // Never accept a PIN here — verifying one would reopen a
                 // guessing oracle after the retry budget is exhausted.
-                if !req.force {
+                if !self.physical_recovery_authorized {
                     return HsmResponse::err(
                         ERR_LOCKED_OUT,
-                        "device locked out; rebooting into the bootloader requires \"force\":true",
+                        "device locked out; hold physical recovery low during reset",
                     );
                 }
             }
@@ -513,6 +560,12 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 let mut salt = [0u8; 16];
                 self.drbg.fill_bytes(&mut salt);
                 let max_retries = req.max_retries.unwrap_or(10);
+                if max_retries == 0 {
+                    return HsmResponse::err(
+                        ERR_BAD_REQUEST,
+                        "maxRetries must be between 1 and 255",
+                    );
+                }
                 let wipe = req.wipe_on_lockout.unwrap_or(false);
 
                 let secret = match self.flash.device_secret() {
@@ -557,6 +610,8 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 self.ca_pubkey = Some(pubkey);
                 self.ca = None; // locked until unlock
                 self.wrap_kek = None;
+                self.wrap_salt = None;
+                self.pin_backoff_until_ms = 0;
                 self.state = DeviceState::ProdLocked;
                 HsmResponse::with(|r| {
                     r.init = Some(InitResp {
@@ -667,13 +722,13 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     fn hsm_lock(&mut self) -> HsmResponse {
         match self.state {
             DeviceState::ProdReady => {
-                self.ca = None; // CaKey zeroizes on drop
-                self.wrap_kek = None; // Zeroizing
-                self.wrap_salt = None;
+                self.drop_live_secrets();
                 self.state = DeviceState::ProdLocked;
                 HsmResponse::with(|r| r.lock = Some(OkResp { ok: true }))
             }
             DeviceState::ProdLocked | DeviceState::LockedOut => {
+                // Defensive cleanup if state and secret presence diverged.
+                self.drop_live_secrets();
                 HsmResponse::with(|r| r.lock = Some(OkResp { ok: true }))
             }
             DeviceState::DevReady => HsmResponse::err(ERR_BAD_MODE, "dev mode cannot be locked"),
@@ -684,19 +739,65 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     }
 
     fn hsm_set_time(&mut self, req: SetTimeReq) -> HsmResponse {
-        match self.clock.set(&self.mono, req.unix_seconds) {
-            Ok(previous_set) => HsmResponse::with(|r| {
-                r.set_time = Some(SetTimeResp {
-                    ok: true,
-                    uptime_ms: self.mono.now_micros() / 1000,
-                    previous_set,
+        if self.trusted_time_floor_unavailable {
+            return HsmResponse::err(
+                ERR_FLASH,
+                "trusted time state is unavailable; reboot or factory-reset after repairing flash",
+            );
+        }
+        let first_set = !self.clock.is_set();
+        if first_set && !self.physical_recovery_authorized {
+            if let Some(floor) = self.trusted_time_floor {
+                let too_far = match req.unix_seconds.checked_sub(floor) {
+                    Some(delta) => delta.unsigned_abs() > crate::clock::MAX_DRIFT_SECS as u64,
+                    None => true,
+                };
+                if too_far {
+                    return HsmResponse::err(
+                        ERR_BAD_REQUEST,
+                        "unixSeconds drifts too far from persisted trusted time; use physical recovery to re-anchor",
+                    );
+                }
+            }
+        }
+
+        // Do not update RAM if persisting a changed trust floor fails.
+        let mut next_clock = self.clock;
+        match next_clock.set(&self.mono, req.unix_seconds) {
+            Ok(previous_set) => {
+                let old_floor = self.trusted_time_floor;
+                let mut next_floor = old_floor;
+                if first_set && (old_floor.is_none() || self.physical_recovery_authorized) {
+                    next_floor = Some(req.unix_seconds);
+                } else if let (Some(floor), Some(trusted_now)) =
+                    (old_floor, next_clock.trusted_now(&self.mono))
+                {
+                    // Persist only monotonic progress, never caller-controlled
+                    // resync values, and limit flash wear to hourly updates.
+                    if trusted_now.saturating_sub(floor) >= 3600 {
+                        next_floor = Some(trusted_now);
+                    }
+                }
+                if next_floor != old_floor
+                    && storage::TIME_FLOOR
+                        .write(
+                            &mut self.flash,
+                            &next_floor.expect("changed floor is present").to_be_bytes(),
+                        )
+                        .is_err()
+                {
+                    return HsmResponse::err(ERR_FLASH, "failed to persist trusted time floor");
+                }
+                self.clock = next_clock;
+                self.trusted_time_floor = next_floor;
+                HsmResponse::with(|r| {
+                    r.set_time = Some(SetTimeResp {
+                        ok: true,
+                        uptime_ms: self.mono.now_micros() / 1000,
+                        previous_set,
+                    })
                 })
-            }),
-            // See `clock::Clock::set`: rejects an implausible first-ever value
-            // or, once a time is already tracked, a jump too large to be a
-            // legitimate resync — closing the gap where an unbounded clock let
-            // anything with signing access pre-mint certificates dated far
-            // outside their true issuance window.
+            }
             Err(crate::clock::Rejected) => HsmResponse::err(
                 ERR_BAD_REQUEST,
                 "unixSeconds is implausible or drifts too far from the device's tracked time",
@@ -875,20 +976,16 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
 
     /// Erase the CA key and all config. A `prodLocked`/`prodReady` device
     /// requires the current PIN (reusing `verify_pin`'s tick/backoff/lockout
-    /// accounting — a wrong guess here counts the same as a wrong `unlock`)
-    /// unless `force` is set, so physical/USB access to a locked device no
-    /// longer suffices on its own to destroy the CA key. `force` remains as
-    /// the "I forgot my PIN" escape hatch — but it is never accepted as a way
-    /// to bypass PIN *verification* while locked out: `lockedOut` only takes
-    /// `force`, never a `pin`, so this can't become a second guessing oracle
-    /// after the retry budget is already exhausted.
+    /// accounting — a wrong guess here counts the same as a wrong `unlock`) or
+    /// physical recovery sampled by firmware at boot. Locked-out devices only
+    /// accept the physical gesture and never verify another PIN.
     fn hsm_factory_reset(&mut self, req: FactoryResetReq) -> HsmResponse {
         if req.confirm != "ERASE" {
             return HsmResponse::err(ERR_BAD_REQUEST, "confirm must be \"ERASE\"");
         }
         match self.state {
             DeviceState::ProdLocked | DeviceState::ProdReady => {
-                if !req.force {
+                if !self.physical_recovery_authorized {
                     match &req.pin {
                         Some(pin) => {
                             if let Err(resp) = self.verify_pin(pin) {
@@ -898,37 +995,40 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                         None => {
                             return HsmResponse::err(
                                 ERR_BAD_REQUEST,
-                                "factory-reset requires \"pin\" or \"force\":true in prod mode",
+                                "factory-reset requires a PIN or physical recovery held low during reset",
                             )
                         }
                     }
                 }
             }
             DeviceState::LockedOut => {
-                if !req.force {
+                if !self.physical_recovery_authorized {
                     return HsmResponse::err(
                         ERR_LOCKED_OUT,
-                        "device locked out; factory-reset requires \"force\":true",
+                        "device locked out; hold physical recovery low during reset",
                     );
                 }
             }
             DeviceState::Uninitialized | DeviceState::DevReady => {}
         }
         // Drop live secrets from RAM first, regardless of the flash outcome.
-        self.ca = None;
-        self.wrap_kek = None;
-        self.wrap_salt = None;
+        self.drop_live_secrets();
 
         // Erase every persistent region and verify the sensitive records are
         // actually gone; do not claim success while key material may remain.
         let key_gone = self.erase_key_verified();
         let cfg_ok = storage::CONFIG.erase_both(&mut self.flash).is_ok();
+        let time_ok = storage::TIME_FLOOR.erase_both(&mut self.flash).is_ok();
         let pin_ok = pin::reset(&mut self.flash).is_ok();
         let cfg_gone = matches!(storage::CONFIG.read_latest(&mut self.flash), Ok(None));
+        let time_gone = matches!(storage::TIME_FLOOR.read_latest(&mut self.flash), Ok(None));
 
-        if key_gone && cfg_ok && pin_ok && cfg_gone {
+        if key_gone && cfg_ok && time_ok && pin_ok && cfg_gone && time_gone {
             self.ca_pubkey = None;
             self.config = None;
+            self.trusted_time_floor = None;
+            self.trusted_time_floor_unavailable = false;
+            self.pin_backoff_until_ms = 0;
             self.state = DeviceState::Uninitialized;
             return HsmResponse::with(|r| r.factory_reset = Some(OkResp { ok: true }));
         }
@@ -947,17 +1047,9 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     /// PIN, applies backoff and lockout (wiping the key if configured) and
     /// returns the structured error response.
     ///
-    /// The backoff owed for *prior* failures is enforced as a gate here —
-    /// before any flash write or Argon2id work for *this* attempt — rather
-    /// than as a blocking sleep after the fact. Two things fall out of that:
-    /// every response stays fast (bounded by Argon2id, not by up to 30s of
-    /// accumulated backoff — a shared serial transport with a fixed read
-    /// timeout can otherwise time out mid-response and, on retry, receive a
-    /// *different* request's stale answer); and the gate is reset-resistant,
-    /// since it reads the *persisted* attempt count and the monotonic timer's
-    /// reading *since this boot* — an attacker power-cycling the device
-    /// between guesses just restarts the same countdown from zero rather than
-    /// skipping it, unlike a synchronous sleep a reset simply aborts.
+    /// Backoff is enforced as a non-blocking gate before flash writes or
+    /// Argon2id work. It has a real failure-relative deadline in RAM and is
+    /// conservatively reconstructed from the persisted counter on boot.
     #[allow(clippy::result_large_err)] // HsmResponse is the natural error payload here
     fn verify_pin(&mut self, pin_str: &str) -> Result<UnlockedSeed, HsmResponse> {
         let cfg = self.config.expect("prod implies config");
@@ -967,15 +1059,14 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             Err(_) => return Err(HsmResponse::err(ERR_FLASH, "counter read failed")),
         };
         if prior_failures > 0 {
-            let required_ms = pin::backoff_ms(prior_failures.saturating_sub(1) as u32) as u64;
-            let elapsed_ms = self.mono.now_micros() / 1000;
-            if elapsed_ms < required_ms {
+            let now_ms = self.mono.now_micros() / 1000;
+            if now_ms < self.pin_backoff_until_ms {
                 let remaining = (cfg.max_retries as u32).saturating_sub(prior_failures as u32);
                 return Err(pin_error(
                     ERR_BUSY,
                     "still backing off after a recent failed attempt",
                     remaining,
-                    (required_ms - elapsed_ms) as u32,
+                    (self.pin_backoff_until_ms - now_ms) as u32,
                 ));
             }
         }
@@ -1012,12 +1103,11 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             }
             Err(_) => {
                 let max = cfg.max_retries as u32;
-                // Reported to the client as a hint for when the *next* attempt
-                // will be honored by the gate above — no longer slept out
-                // synchronously here.
                 let backoff = pin::backoff_ms(attempts.saturating_sub(1) as u32);
+                self.pin_backoff_until_ms =
+                    (self.mono.now_micros() / 1000).saturating_add(backoff as u64);
                 if attempts as u32 >= max {
-                    self.state = DeviceState::LockedOut;
+                    self.enter_locked_out();
                     if cfg.wipe_on_lockout {
                         // Only claim the wipe once both key copies are verified
                         // unreadable; otherwise surface a hard error rather than
@@ -1071,23 +1161,43 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     fn reset_pin_counter_best_effort(&mut self) {
         for _ in 0..2 {
             if pin::reset(&mut self.flash).is_ok() {
+                self.pin_backoff_until_ms = 0;
                 return;
             }
         }
+    }
+
+    /// Drop every production live secret. Safe to call redundantly.
+    fn drop_live_secrets(&mut self) {
+        self.ca = None;
+        self.wrap_kek = None;
+        self.wrap_salt = None;
+    }
+
+    /// Centralized lockout entry keeps state and secret destruction inseparable.
+    fn enter_locked_out(&mut self) {
+        self.drop_live_secrets();
+        self.state = DeviceState::LockedOut;
     }
 
     /// Force a production device back to `ProdLocked`, dropping the live CA
     /// key, independent of the `hsm.lock` command. Intended for the firmware
     /// to call on a transport-level disconnect (USB bus reset/suspend) —
     /// `docs/THREAT_MODEL.md` documents production devices as re-locking on
-    /// exactly those events. No-op outside `ProdReady` (dev mode has no lock
-    /// concept; every other state has no live key to drop).
+    /// exactly those events. Production state and config are checked
+    /// independently so a fault cannot suppress cleanup by desynchronizing
+    /// them; genuine dev mode retains its normal no-lock behavior.
     pub fn relock_on_transport_reset(&mut self) {
-        if self.state == DeviceState::ProdReady {
-            self.ca = None;
-            self.wrap_kek = None;
-            self.wrap_salt = None;
-            self.state = DeviceState::ProdLocked;
+        let production_state = matches!(
+            self.state,
+            DeviceState::ProdLocked | DeviceState::ProdReady | DeviceState::LockedOut
+        );
+        let production_config = self.config.map(|c| c.mode) == Some(Mode::Prod);
+        if production_state || production_config {
+            self.drop_live_secrets();
+            if self.state == DeviceState::ProdReady {
+                self.state = DeviceState::ProdLocked;
+            }
         }
     }
 
@@ -1436,21 +1546,18 @@ mod tests {
         let pk = call(&mut h, r#"{"hsm":{"getPublicKey":{}}}"#);
         assert_eq!(pk["hsm"]["error"]["code"], "ERR_NO_KEY");
 
-        // factoryReset escapes lockout — but only with `force`, since a
-        // lockedOut device never accepts a `pin` (that would reopen a
-        // guessing oracle after the retry budget is exhausted).
+        // LockedOut devices never accept another PIN. Recovery requires the
+        // boot-latched physical gesture.
         let denied = call(&mut h, r#"{"hsm":{"factoryReset":{"confirm":"ERASE"}}}"#);
         assert_eq!(denied["hsm"]["error"]["code"], "ERR_LOCKED_OUT");
-        let fr = call(
-            &mut h,
-            r#"{"hsm":{"factoryReset":{"confirm":"ERASE","force":true}}}"#,
-        );
+        h.set_physical_recovery_authorized(true);
+        let fr = call(&mut h, r#"{"hsm":{"factoryReset":{"confirm":"ERASE"}}}"#);
         assert_eq!(fr["hsm"]["factoryReset"]["ok"], true);
         assert_eq!(h.state(), DeviceState::Uninitialized);
     }
 
     #[test]
-    fn factory_reset_requires_pin_or_force_when_locked() {
+    fn factory_reset_requires_pin_or_physical_recovery_when_locked() {
         // A prodLocked device must not be destroyable by an attacker who only
         // has USB/physical access but not the PIN — the primary regression
         // test for the unauthenticated-factoryReset finding.
@@ -1461,7 +1568,7 @@ mod tests {
         );
         assert_eq!(h.state(), DeviceState::ProdLocked);
 
-        // No pin, no force: rejected, key intact.
+        // No PIN and no physical recovery: rejected, key intact.
         let denied = call(&mut h, r#"{"hsm":{"factoryReset":{"confirm":"ERASE"}}}"#);
         assert_eq!(denied["hsm"]["error"]["code"], "ERR_BAD_REQUEST");
         assert_eq!(h.state(), DeviceState::ProdLocked);
@@ -1485,24 +1592,26 @@ mod tests {
     }
 
     #[test]
-    fn factory_reset_force_bypasses_forgotten_pin() {
-        // The explicit fallback for a forgotten PIN, from a still-reachable
-        // (not locked-out) prodLocked device.
+    fn factory_reset_physical_recovery_bypasses_forgotten_pin() {
         let mut h = boot();
         call(
             &mut h,
             r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw"}}}"#,
         );
-        let r = call(
+        // A legacy wire-level force field is ignored and grants no authority.
+        let legacy = call(
             &mut h,
             r#"{"hsm":{"factoryReset":{"confirm":"ERASE","force":true}}}"#,
         );
+        assert_eq!(legacy["hsm"]["error"]["code"], "ERR_BAD_REQUEST");
+        h.set_physical_recovery_authorized(true);
+        let r = call(&mut h, r#"{"hsm":{"factoryReset":{"confirm":"ERASE"}}}"#);
         assert_eq!(r["hsm"]["factoryReset"]["ok"], true);
         assert_eq!(h.state(), DeviceState::Uninitialized);
     }
 
     #[test]
-    fn reboot_bootloader_requires_pin_or_force_when_locked() {
+    fn reboot_bootloader_requires_pin_or_physical_recovery_when_locked() {
         // Mirrors the factoryReset gating: a locked device must not let an
         // unauthenticated USB party force it into the bootloader, which (pre
         // secure-boot burn) accepts arbitrary firmware over the same USB link.
@@ -1515,8 +1624,33 @@ mod tests {
         let denied = call(&mut h, r#"{"hsm":{"rebootBootloader":{}}}"#);
         assert_eq!(denied["hsm"]["error"]["code"], "ERR_BAD_REQUEST");
 
-        let forced = call(&mut h, r#"{"hsm":{"rebootBootloader":{"force":true}}}"#);
-        assert_eq!(forced["hsm"]["rebootBootloader"]["ok"], true);
+        let legacy = call(&mut h, r#"{"hsm":{"rebootBootloader":{"force":true}}}"#);
+        assert_eq!(legacy["hsm"]["error"]["code"], "ERR_BAD_REQUEST");
+
+        h.set_physical_recovery_authorized(true);
+        let recovered = call(&mut h, r#"{"hsm":{"rebootBootloader":{}}}"#);
+        assert_eq!(recovered["hsm"]["rebootBootloader"]["ok"], true);
+    }
+
+    #[test]
+    fn locked_out_recovery_never_verifies_pin_but_allows_physical_reboot() {
+        let mut h = boot();
+        call(
+            &mut h,
+            r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw","maxRetries":1}}}"#,
+        );
+        assert_eq!(
+            call(&mut h, r#"{"hsm":{"unlock":{"pin":"wrongpin"}}}"#)["hsm"]["error"]["code"],
+            "ERR_LOCKED_OUT"
+        );
+        let pin = call(
+            &mut h,
+            r#"{"hsm":{"rebootBootloader":{"pin":"hunter2pw"}}}"#,
+        );
+        assert_eq!(pin["hsm"]["error"]["code"], "ERR_LOCKED_OUT");
+        h.set_physical_recovery_authorized(true);
+        let recovered = call(&mut h, r#"{"hsm":{"rebootBootloader":{}}}"#);
+        assert_eq!(recovered["hsm"]["rebootBootloader"]["ok"], true);
     }
 
     #[test]
@@ -1559,6 +1693,77 @@ mod tests {
         advance(&mut h2, 1);
         let ok = call(&mut h2, r#"{"hsm":{"unlock":{"pin":"hunter2pw"}}}"#);
         assert_eq!(ok["hsm"]["unlock"]["ok"], true);
+    }
+
+    #[test]
+    fn pin_backoff_is_relative_to_the_failure_not_total_uptime() {
+        let mut h = boot();
+        call(
+            &mut h,
+            r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw","maxRetries":10}}}"#,
+        );
+        advance(&mut h, 60);
+        let wrong = call(&mut h, r#"{"hsm":{"unlock":{"pin":"wrongpin"}}}"#);
+        assert_eq!(wrong["hsm"]["error"]["code"], "ERR_BAD_PIN");
+        let immediate = call(&mut h, r#"{"hsm":{"unlock":{"pin":"hunter2pw"}}}"#);
+        assert_eq!(immediate["hsm"]["error"]["code"], "ERR_BUSY");
+    }
+
+    #[test]
+    fn prod_init_rejects_zero_retry_budget() {
+        let mut h = boot();
+        let r = call(
+            &mut h,
+            r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw","maxRetries":0}}}"#,
+        );
+        assert_eq!(r["hsm"]["error"]["code"], "ERR_BAD_REQUEST");
+        assert_eq!(h.state(), DeviceState::Uninitialized);
+    }
+
+    #[test]
+    fn lockout_drops_live_secrets_and_cannot_sign() {
+        let mut h = boot();
+        call(
+            &mut h,
+            r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw","maxRetries":1}}}"#,
+        );
+        call(&mut h, r#"{"hsm":{"unlock":{"pin":"hunter2pw"}}}"#);
+        call(&mut h, r#"{"hsm":{"setTime":{"unixSeconds":1700000000}}}"#);
+        assert!(call(&mut h, &sign_request("1h"))["signSshKey"].is_object());
+
+        let locked = call(
+            &mut h,
+            r#"{"hsm":{"changePin":{"currentPin":"wrongpin","newPin":"newpassword"}}}"#,
+        );
+        assert_eq!(locked["hsm"]["error"]["code"], "ERR_LOCKED_OUT");
+        assert_eq!(h.state(), DeviceState::LockedOut);
+        assert!(h.ca.is_none());
+        assert!(h.wrap_kek.is_none());
+        assert!(h.wrap_salt.is_none());
+        assert!(call(&mut h, &sign_request("1h"))["error"].is_string());
+    }
+
+    #[test]
+    fn transport_reset_scrubs_prod_ready_secrets_when_config_is_missing() {
+        let mut h = boot();
+        call(
+            &mut h,
+            r#"{"hsm":{"init":{"mode":"prod","pin":"hunter2pw"}}}"#,
+        );
+        call(&mut h, r#"{"hsm":{"unlock":{"pin":"hunter2pw"}}}"#);
+        assert_eq!(h.state(), DeviceState::ProdReady);
+        assert!(h.ca.is_some());
+        assert!(h.wrap_kek.is_some());
+        assert!(h.wrap_salt.is_some());
+
+        // Model a fault that desynchronizes cached config from production
+        // state. Transport cleanup must rely on the state independently.
+        h.config = None;
+        h.relock_on_transport_reset();
+        assert_eq!(h.state(), DeviceState::ProdLocked);
+        assert!(h.ca.is_none());
+        assert!(h.wrap_kek.is_none());
+        assert!(h.wrap_salt.is_none());
     }
 
     #[test]
@@ -1617,6 +1822,107 @@ mod tests {
         let ca_pub = ca_pub_from_line(&ca_line);
         let f = verify_and_decode(cert, &ca_pub);
         assert_eq!(f.valid_before, 1_700_000_000 + 3600);
+    }
+
+    #[test]
+    fn persisted_time_floor_blocks_reboot_reanchor_without_physical_recovery() {
+        let mut flash = MockFlash::new();
+        {
+            let mut h = Hsm::boot(MockEntropy::new(1), MockClock::new(), &mut flash);
+            assert_eq!(
+                call(&mut h, r#"{"hsm":{"setTime":{"unixSeconds":1700000000}}}"#)["hsm"]["setTime"]
+                    ["ok"],
+                true
+            );
+        }
+        let mut h = Hsm::boot(MockEntropy::new(2), MockClock::new(), &mut flash);
+        let one_year = 365 * 24 * 3600;
+        let denied = call(
+            &mut h,
+            &format!(
+                r#"{{"hsm":{{"setTime":{{"unixSeconds":{}}}}}}}"#,
+                1_700_000_000 + one_year
+            ),
+        );
+        assert_eq!(denied["hsm"]["error"]["code"], "ERR_BAD_REQUEST");
+        h.set_physical_recovery_authorized(true);
+        let recovered = call(
+            &mut h,
+            &format!(
+                r#"{{"hsm":{{"setTime":{{"unixSeconds":{}}}}}}}"#,
+                1_700_000_000 + one_year
+            ),
+        );
+        assert_eq!(recovered["hsm"]["setTime"]["ok"], true);
+    }
+
+    #[test]
+    fn trusted_time_floor_read_error_fails_closed() {
+        for region in [crate::hal::Region::TimeA, crate::hal::Region::TimeB] {
+            let mut flash = MockFlash::new();
+            storage::TIME_FLOOR
+                .write(&mut flash, &1_700_000_000i64.to_be_bytes())
+                .unwrap();
+            flash.set_read_fault(Some(region));
+
+            let mut h = Hsm::boot(MockEntropy::new(1), MockClock::new(), &mut flash);
+            // Physical recovery authorizes a deliberate large re-anchor, but
+            // never bypasses unavailable trusted-time storage.
+            h.set_physical_recovery_authorized(true);
+            let r = call(&mut h, r#"{"hsm":{"setTime":{"unixSeconds":1731536000}}}"#);
+            assert_eq!(r["hsm"]["error"]["code"], "ERR_FLASH");
+            assert!(!h.clock.is_set());
+
+            // The boot's failure remains latched even if the transient fault
+            // clears. A clean reboot re-reads the persisted floor safely.
+            h.flash.set_read_fault(None);
+            let retry = call(&mut h, r#"{"hsm":{"setTime":{"unixSeconds":1700000000}}}"#);
+            assert_eq!(retry["hsm"]["error"]["code"], "ERR_FLASH");
+            drop(h);
+
+            let mut rebooted = Hsm::boot(MockEntropy::new(2), MockClock::new(), &mut flash);
+            let recovered = call(
+                &mut rebooted,
+                r#"{"hsm":{"setTime":{"unixSeconds":1700000000}}}"#,
+            );
+            assert_eq!(recovered["hsm"]["setTime"]["ok"], true);
+        }
+    }
+
+    #[test]
+    fn malformed_trusted_time_floor_fails_closed() {
+        let mut flash = MockFlash::new();
+        storage::TIME_FLOOR.write(&mut flash, b"short").unwrap();
+
+        let mut h = Hsm::boot(MockEntropy::new(1), MockClock::new(), &mut flash);
+        let r = call(&mut h, r#"{"hsm":{"setTime":{"unixSeconds":1700000000}}}"#);
+        assert_eq!(r["hsm"]["error"]["code"], "ERR_FLASH");
+        assert!(!h.clock.is_set());
+    }
+
+    #[test]
+    fn factory_reset_erases_persisted_time_floor() {
+        let mut flash = MockFlash::new();
+        {
+            let mut h = Hsm::boot(MockEntropy::new(1), MockClock::new(), &mut flash);
+            call(&mut h, r#"{"hsm":{"init":{"mode":"dev"}}}"#);
+            call(&mut h, r#"{"hsm":{"setTime":{"unixSeconds":1700000000}}}"#);
+            assert_eq!(
+                call(&mut h, r#"{"hsm":{"factoryReset":{"confirm":"ERASE"}}}"#)["hsm"]
+                    ["factoryReset"]["ok"],
+                true
+            );
+        }
+        let mut h = Hsm::boot(MockEntropy::new(2), MockClock::new(), &mut flash);
+        let one_year = 365 * 24 * 3600;
+        let resync = call(
+            &mut h,
+            &format!(
+                r#"{{"hsm":{{"setTime":{{"unixSeconds":{}}}}}}}"#,
+                1_700_000_000 + one_year
+            ),
+        );
+        assert_eq!(resync["hsm"]["setTime"]["ok"], true);
     }
 
     #[test]
@@ -1787,10 +2093,8 @@ mod tests {
         }
         flash.set_erase_fault(true);
         let mut h = Hsm::boot(MockEntropy::new(2), MockClock::new(), &mut flash);
-        let r = call(
-            &mut h,
-            r#"{"hsm":{"factoryReset":{"confirm":"ERASE","force":true}}}"#,
-        );
+        h.set_physical_recovery_authorized(true);
+        let r = call(&mut h, r#"{"hsm":{"factoryReset":{"confirm":"ERASE"}}}"#);
         assert_eq!(r["hsm"]["error"]["code"], "ERR_FLASH");
         // State must reflect reality: the key record is still present.
         let s = call(&mut h, r#"{"hsm":{"status":{}}}"#);

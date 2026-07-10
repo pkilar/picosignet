@@ -2,8 +2,9 @@
 
 Persistent HSM state lives in two places on the Waveshare RP2350-One:
 
-- the last six 4 KiB sectors of the 4 MiB **QSPI flash** (records below) —
-  external, dumpable, holds only ciphertext and public data;
+- the last eight 4 KiB sectors of the 4 MiB **QSPI flash** (records below) —
+  external, dumpable, holds ciphertext, public data, retry state, and a
+  persisted trusted-time floor;
 - two pages of the RP2350's on-die **OTP** — holds the per-device wrapping
   secret that makes the flash records chip-bound.
 
@@ -15,7 +16,9 @@ region, a hard ceiling protecting the key.
 
 | Region         | Offset     | Size      | Contents                                                         |
 | -------------- | ---------- | --------- | ---------------------------------------------------------------- |
-| Firmware (XIP) | `0x000000` | ~3.98 MiB | vector table, IMAGE_DEF block, code + rodata; ends at `0x3FA000` |
+| Firmware (XIP) | `0x000000` | ~3.97 MiB | vector table, IMAGE_DEF block, code + rodata; ends at `0x3F8000` |
+| TIME_A         | `0x3F8000` | 4 KiB     | trusted Unix-time floor record                                   |
+| TIME_B         | `0x3F9000` | 4 KiB     | redundant trusted-time-floor copy                                |
 | CONFIG_A       | `0x3FA000` | 4 KiB     | device config record                                             |
 | CONFIG_B       | `0x3FB000` | 4 KiB     | redundant config copy                                            |
 | KEY_A          | `0x3FC000` | 4 KiB     | wrapped CA key record                                            |
@@ -27,7 +30,7 @@ There is no BOOT2 second-stage bootloader: the RP2350 bootrom boots directly
 from the `IMAGE_DEF` metadata block (`.start_block`, placed right after the
 vector table inside the first 4 KiB). Current firmware footprint is ≈190 KiB.
 
-## Record format (CONFIG / KEY)
+## Record format (TIME / CONFIG / KEY)
 
 A/B pairs give power-fail safety. Each record:
 
@@ -42,6 +45,14 @@ magic "UHSM" (u32) | version (u16=2) | seq (u32) | payload_len (u16) | payload |
 - CRC-32 (ISO-HDLC) over everything preceding the CRC.
 - The schema `version` is **2**. v1 (which stored the Argon2 salt in the config
   record) is rejected by the version check.
+
+### Trusted-time-floor payload
+
+`unix_seconds (i64, big-endian)`. The floor survives reboot, so the first
+normal `setTime` must remain within the normal 15-minute drift allowance.
+Holding GPIO15 low during reset authorizes an intentional larger re-anchor.
+Within a boot, later resyncs are validated against an immutable monotonic
+anchor, and the persisted floor advances only from monotonic elapsed time.
 
 ### DeviceConfig payload
 
@@ -116,12 +127,10 @@ verification always costs an attempt; it cannot be used to brute-force the PIN
 for free. Up to 4096 attempts fit per erase, far above any sane `max_retries`.
 
 The exponential backoff between attempts (`min(250 ms·2^n, 30 s)`) is enforced
-as a gate read from this same persisted count, checked against the monotonic
-timer's reading *since boot* — not a blocking sleep. A blocking sleep is
-trivially defeated by power-cycling the device mid-wait; reading the gate from
-flash means a reset just restarts the same wait from zero instead of skipping
-it, and keeps every response fast enough that a shared serial transport's read
-timeout never trips mid-backoff.
+as a non-blocking gate. Each failure sets an absolute monotonic deadline; on
+boot, a nonzero persisted count conservatively reconstructs the matching delay
+from that boot's zero point. This keeps responses fast and prevents both long
+uptime and power cycling from skipping a required wait.
 
 NOR note: every tick for counts < 256 lands in page 0, programmed incrementally
 (only ever clearing fresh bits, never re-programming a byte). The W25Q-class

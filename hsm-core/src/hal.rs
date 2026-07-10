@@ -62,6 +62,10 @@ pub trait Monotonic {
 /// layout can change without touching core logic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Region {
+    /// Primary persisted trusted-time-floor record.
+    TimeA,
+    /// Redundant trusted-time-floor copy (A/B power-fail safety).
+    TimeB,
     /// Primary device-config record (mode, Argon2 params, salt, retry policy).
     ConfigA,
     /// Redundant device-config copy (A/B power-fail safety).
