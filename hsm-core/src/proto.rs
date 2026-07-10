@@ -235,29 +235,19 @@ pub struct FactoryResetReq {
     #[serde(default)]
     pub confirm: String,
     /// Current PIN — required to factory-reset a `prodLocked`/`prodReady`
-    /// device unless `force` is set. Reuses the same verification (and
-    /// therefore the same tick/backoff/lockout accounting) as `hsm.unlock`.
+    /// device unless the firmware latched physical recovery at boot. Reuses
+    /// the same verification and accounting as `hsm.unlock`.
     #[serde(default)]
     pub pin: Option<String>,
-    /// Bypass the PIN requirement — the "I forgot my PIN" escape hatch. Never
-    /// honored from `lockedOut` as a way to *verify* a PIN (that would reopen
-    /// a guessing oracle after the retry budget is exhausted); from
-    /// `lockedOut`, `force` is the only way to reset at all.
-    #[serde(default)]
-    pub force: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
 pub struct RebootBootloaderReq {
     /// Current PIN — required to reboot a `prodLocked`/`prodReady` device into
-    /// the USB bootloader unless `force` is set. A pre-secure-boot-burn device
-    /// accepts arbitrary firmware over the same USB connection while in the
-    /// bootloader, so this command must not be free to trigger without proof
-    /// of PIN knowledge once a key exists.
+    /// the USB bootloader unless firmware latched physical recovery at boot.
+    /// A locked-out device never accepts a PIN here.
     #[serde(default)]
     pub pin: Option<String>,
-    #[serde(default)]
-    pub force: bool,
 }
 
 /// Management response. Like [`Response`], only the set variant is serialized;

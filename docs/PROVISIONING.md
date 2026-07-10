@@ -179,10 +179,10 @@ network one. Prefer tagging just the listener that needs it instead, with a
 picosignet bridge --listen unix:/run/picosignet.sock+mgmt,vsock:5000
 ```
 
-`factory-reset` and `reboot-bootloader` on a production device now require the
-PIN (or `--force`, for a forgotten PIN) the same way `unlock` does — a locked
-device is no longer destroyable, or forceable into the bootloader for
-reflashing, by USB/physical access alone.
+`factory-reset` and `reboot-bootloader` on a production device require the PIN
+the same way `unlock` does. Forgotten-PIN recovery requires holding GPIO15 low
+while resetting the device, then using `--physical-recovery` only to suppress
+the CLI's PIN prompt; the device independently enforces the boot-time latch.
 
 ## 4. Verify end-to-end
 

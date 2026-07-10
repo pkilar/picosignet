@@ -37,6 +37,9 @@ rand_chacha = { version = "0.3", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["derive"] }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 crc = "3"
+p256 = { version = "0.13", default-features = false, features = ["arithmetic"] }
+p384 = { version = "0.13", default-features = false, features = ["arithmetic"] }
+p521 = { version = "0.13", default-features = false, features = ["arithmetic"] }
 
 # Optimize even the dev firmware: embedded targets are flash-constrained and the
 # crypto wants release-grade codegen. Host crates keep the default dev profile.

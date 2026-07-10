@@ -20,6 +20,9 @@ rand_chacha.workspace = true
 zeroize.workspace = true
 base64.workspace = true
 crc.workspace = true
+p256.workspace = true
+p384.workspace = true
+p521.workspace = true
 
 [features]
 default = []

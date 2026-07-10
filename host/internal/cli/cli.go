@@ -91,12 +91,12 @@ usage: picosignet <command> [flags]
   status         print device status
   set-time       push wall-clock time to the device
   change-pin     change the production-mode PIN
-  factory-reset  erase all keys and config (destructive; prompts for the PIN
-                 in prod mode, or pass --force if it's been forgotten)
+factory-reset  erase all keys and config (destructive; prompts for the PIN
+               in prod mode; forgotten-PIN recovery requires GPIO15 low at reset)
   self-test      run on-device self-tests and an end-to-end signing check
   add-entropy    mix host-supplied entropy into the device pool
-  reboot-bootloader  reset the device into the USB bootloader (for reflashing;
-                 prompts for the PIN in prod mode, or pass --force)
+reboot-bootloader  reset the device into the USB bootloader (for reflashing;
+               prompts for the PIN in prod mode; recovery requires GPIO15 low at reset)
 
 Common flags: --port <path> (default: auto-discover), --timeout <dur>
 `)
@@ -227,6 +227,9 @@ func cmdInit(args []string) error {
 	wipe := fs.Bool("wipe-on-lockout", false, "erase the key when the retry budget is exhausted")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *prod && (*maxRetries == 0 || *maxRetries > 255) {
+		return errors.New("--max-retries must be between 1 and 255")
 	}
 	conn, err := openDevice(c)
 	if err != nil {
@@ -435,7 +438,7 @@ func cmdFactoryReset(args []string) error {
 	fs := flag.NewFlagSet("factory-reset", flag.ContinueOnError)
 	c := bindCommon(fs)
 	yes := fs.Bool("yes", false, "skip the interactive confirmation")
-	force := fs.Bool("force", false, "bypass the PIN requirement (e.g. a forgotten PIN); has no effect in dev mode or before init")
+	physicalRecovery := fs.Bool("physical-recovery", false, "GPIO15 was held low during device reset; suppress PIN prompt only")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -453,9 +456,9 @@ func cmdFactoryReset(args []string) error {
 	}
 	defer conn.Close()
 
-	req := &hsmproto.FactoryResetReq{Confirm: "ERASE", Force: *force}
-	if !*force && devicePromptsForPin(conn, c.timeout) {
-		pin, err := readSecret("PIN (or re-run with --force if you've forgotten it): ")
+	req := &hsmproto.FactoryResetReq{Confirm: "ERASE"}
+	if !*physicalRecovery && devicePromptsForPin(conn, c.timeout) {
+		pin, err := readSecret("PIN: ")
 		if err != nil {
 			return err
 		}
@@ -471,7 +474,7 @@ func cmdFactoryReset(args []string) error {
 func cmdRebootBootloader(args []string) error {
 	fs := flag.NewFlagSet("reboot-bootloader", flag.ContinueOnError)
 	c := bindCommon(fs)
-	force := fs.Bool("force", false, "bypass the PIN requirement; has no effect in dev mode or before init")
+	physicalRecovery := fs.Bool("physical-recovery", false, "GPIO15 was held low during device reset; suppress PIN prompt only")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -481,9 +484,9 @@ func cmdRebootBootloader(args []string) error {
 	}
 	defer conn.Close()
 
-	req := &hsmproto.RebootBootloader{Force: *force}
-	if !*force && devicePromptsForPin(conn, c.timeout) {
-		pin, err := readSecret("PIN (or re-run with --force if you've forgotten it): ")
+	req := &hsmproto.RebootBootloader{}
+	if !*physicalRecovery && devicePromptsForPin(conn, c.timeout) {
+		pin, err := readSecret("PIN: ")
 		if err != nil {
 			return err
 		}

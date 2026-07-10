@@ -8,10 +8,12 @@ use zeroize::Zeroizing;
 
 use crate::hal::{EntropySource, FlashStore, HalError, Monotonic, Region, SECTOR_LEN};
 
-/// A RAM-backed flash with the five HSM regions. Models NOR semantics loosely:
+/// A RAM-backed flash with the seven HSM regions. Models NOR semantics loosely:
 /// `erase` sets `0xFF`, `program` overwrites a page (the tests don't rely on
 /// bit-clear-only programming except the PIN counter, which only clears bits).
 pub struct MockFlash {
+    time_a: [u8; SECTOR_LEN],
+    time_b: [u8; SECTOR_LEN],
     config_a: [u8; SECTOR_LEN],
     config_b: [u8; SECTOR_LEN],
     key_a: [u8; SECTOR_LEN],
@@ -21,6 +23,8 @@ pub struct MockFlash {
     device_secret: Result<[u8; 32], HalError>,
     /// When true, `erase` fails — used to test fail-closed erase/wipe paths.
     erase_fault: bool,
+    /// Region whose reads fail, for fail-closed boot/storage tests.
+    read_fault: Option<Region>,
 }
 
 /// Fixed mock OTP device secret (32 bytes). Deterministic so golden and
@@ -37,6 +41,8 @@ impl Default for MockFlash {
 impl MockFlash {
     pub fn new() -> Self {
         MockFlash {
+            time_a: [0xFF; SECTOR_LEN],
+            time_b: [0xFF; SECTOR_LEN],
             config_a: [0xFF; SECTOR_LEN],
             config_b: [0xFF; SECTOR_LEN],
             key_a: [0xFF; SECTOR_LEN],
@@ -45,6 +51,7 @@ impl MockFlash {
             unique_id: [0x42; 8],
             device_secret: Ok(MOCK_DEVICE_SECRET),
             erase_fault: false,
+            read_fault: None,
         }
     }
 
@@ -52,6 +59,11 @@ impl MockFlash {
     /// cleared (so reset/lockout-wipe must fail closed rather than claim success).
     pub fn set_erase_fault(&mut self, on: bool) {
         self.erase_fault = on;
+    }
+
+    /// Test helper: fail reads from one logical flash region.
+    pub fn set_read_fault(&mut self, region: Option<Region>) {
+        self.read_fault = region;
     }
 
     pub fn with_unique_id(id: [u8; 8]) -> Self {
@@ -77,6 +89,8 @@ impl MockFlash {
 
     fn region(&self, r: Region) -> &[u8; SECTOR_LEN] {
         match r {
+            Region::TimeA => &self.time_a,
+            Region::TimeB => &self.time_b,
             Region::ConfigA => &self.config_a,
             Region::ConfigB => &self.config_b,
             Region::KeyA => &self.key_a,
@@ -87,6 +101,8 @@ impl MockFlash {
 
     fn region_mut(&mut self, r: Region) -> &mut [u8; SECTOR_LEN] {
         match r {
+            Region::TimeA => &mut self.time_a,
+            Region::TimeB => &mut self.time_b,
             Region::ConfigA => &mut self.config_a,
             Region::ConfigB => &mut self.config_b,
             Region::KeyA => &mut self.key_a,
@@ -105,11 +121,13 @@ impl MockFlash {
         self.region(r)[off]
     }
 
-    /// Serialize the whole flash image (5 sectors + unique id) for the
+    /// Serialize the whole flash image (7 sectors + unique id) for the
     /// simulator's `--state-file` persistence.
     pub fn snapshot(&self) -> alloc::vec::Vec<u8> {
-        let mut v = alloc::vec::Vec::with_capacity(5 * SECTOR_LEN + 8);
+        let mut v = alloc::vec::Vec::with_capacity(7 * SECTOR_LEN + 8);
         for r in [
+            Region::TimeA,
+            Region::TimeB,
             Region::ConfigA,
             Region::ConfigB,
             Region::KeyA,
@@ -122,32 +140,51 @@ impl MockFlash {
         v
     }
 
-    /// Restore a flash image produced by [`MockFlash::snapshot`]. Returns false
-    /// if the data is the wrong length.
+    /// Restore a flash image produced by [`MockFlash::snapshot`]. The legacy
+    /// five-sector format is accepted with an empty time journal; other sizes
+    /// fail clearly rather than being misparsed.
     pub fn restore(&mut self, data: &[u8]) -> bool {
-        if data.len() != 5 * SECTOR_LEN + 8 {
+        let legacy_len = 5 * SECTOR_LEN + 8;
+        let current_len = 7 * SECTOR_LEN + 8;
+        if data.len() != legacy_len && data.len() != current_len {
             return false;
         }
-        let regions = [
-            Region::ConfigA,
-            Region::ConfigB,
-            Region::KeyA,
-            Region::KeyB,
-            Region::PinCounter,
-        ];
+        self.time_a.fill(0xFF);
+        self.time_b.fill(0xFF);
+        let regions: &[Region] = if data.len() == current_len {
+            &[
+                Region::TimeA,
+                Region::TimeB,
+                Region::ConfigA,
+                Region::ConfigB,
+                Region::KeyA,
+                Region::KeyB,
+                Region::PinCounter,
+            ]
+        } else {
+            &[
+                Region::ConfigA,
+                Region::ConfigB,
+                Region::KeyA,
+                Region::KeyB,
+                Region::PinCounter,
+            ]
+        };
         for (i, r) in regions.iter().enumerate() {
             let off = i * SECTOR_LEN;
             self.region_mut(*r)
                 .copy_from_slice(&data[off..off + SECTOR_LEN]);
         }
-        self.unique_id
-            .copy_from_slice(&data[5 * SECTOR_LEN..5 * SECTOR_LEN + 8]);
+        self.unique_id.copy_from_slice(&data[data.len() - 8..]);
         true
     }
 }
 
 impl FlashStore for MockFlash {
     fn read(&mut self, region: Region, buf: &mut [u8]) -> Result<(), HalError> {
+        if self.read_fault == Some(region) {
+            return Err(HalError::Flash);
+        }
         let src = self.region(region);
         if buf.len() < SECTOR_LEN {
             return Err(HalError::OutOfRange);
@@ -250,5 +287,25 @@ impl Monotonic for MockClock {
 
     fn delay_ms(&mut self, ms: u32) {
         self.micros += ms as u64 * 1000;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restore_accepts_legacy_snapshot_with_an_empty_time_journal() {
+        let original = MockFlash::new();
+        let current = original.snapshot();
+        let mut legacy = alloc::vec::Vec::with_capacity(5 * SECTOR_LEN + 8);
+        legacy.extend_from_slice(&current[2 * SECTOR_LEN..7 * SECTOR_LEN]);
+        legacy.extend_from_slice(&current[7 * SECTOR_LEN..]);
+
+        let mut restored = MockFlash::new();
+        assert!(restored.restore(&legacy));
+        assert_eq!(restored.peek(Region::TimeA, 0), 0xFF);
+        assert_eq!(restored.peek(Region::TimeB, 0), 0xFF);
+        assert_eq!(restored.snapshot(), current);
     }
 }

@@ -7,6 +7,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
+use embassy_rp::gpio::{Input, Pull};
 use embassy_rp::peripherals::{PIO0, TRNG, USB};
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
@@ -62,6 +63,12 @@ impl embassy_usb::Handler for ResetHandler {
 
 /// Build the USB device + status LED and run them with the protocol loop.
 pub async fn run(_spawner: Spawner, p: Peripherals) {
+    // GPIO15 is sampled only once, during boot. Its boot-latched value is a
+    // local physical recovery capability, never a protocol-controlled flag.
+    let physical_recovery_authorized = {
+        let recovery = Input::new(p.PIN_15, Pull::Up);
+        recovery.is_low()
+    };
     // Arm the voltage-glitch detectors before anything touches key material;
     // the config locks until next reset.
     let glitch_armed = crate::security::arm_glitch_detectors();
@@ -126,6 +133,7 @@ pub async fn run(_spawner: Spawner, p: Peripherals) {
         crate::otp_secret::lock_slots();
         let flash = EmbassyFlash::new(p.FLASH, device_secret);
         let mut hsm = Hsm::boot(entropy, EmbassyClock, flash);
+        hsm.set_physical_recovery_authorized(physical_recovery_authorized);
         hsm.set_security_flags(
             glitch_armed,
             crate::security::secure_boot_enabled(),

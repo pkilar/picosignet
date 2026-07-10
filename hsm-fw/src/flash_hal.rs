@@ -1,6 +1,6 @@
 //! `FlashStore` over the RP2350's QSPI flash (Embassy blocking driver).
 //!
-//! The five HSM regions map to fixed offsets in the last sectors of the 4 MiB
+//! The seven HSM regions map to fixed offsets in the last sectors of the 4 MiB
 //! flash, kept out of the firmware's FLASH region by `memory.x`. Blocking flash
 //! ops run the bootrom routines from RAM with interrupts masked; the device
 //! processes one request at a time, so a multi-hundred-millisecond erase never
@@ -16,6 +16,8 @@ const FLASH_SIZE: usize = 4 * 1024 * 1024;
 
 // Region base offsets from the start of flash. Must match memory.x and
 // docs/FLASH_LAYOUT.md.
+const TIME_A: u32 = 0x3F8000;
+const TIME_B: u32 = 0x3F9000;
 const CONFIG_A: u32 = 0x3FA000;
 const CONFIG_B: u32 = 0x3FB000;
 const KEY_A: u32 = 0x3FC000;
@@ -55,6 +57,8 @@ impl<'d> EmbassyFlash<'d> {
 
     fn base(region: Region) -> u32 {
         match region {
+            Region::TimeA => TIME_A,
+            Region::TimeB => TIME_B,
             Region::ConfigA => CONFIG_A,
             Region::ConfigB => CONFIG_B,
             Region::KeyA => KEY_A,

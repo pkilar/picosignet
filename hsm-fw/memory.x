@@ -1,12 +1,14 @@
 /* RP2350 flash/RAM layout for PicoSignet (Waveshare RP2350-One, 4 MiB QSPI flash).
  *
- * The last six 4 KiB sectors of the 4 MiB flash are carved out of the FLASH
+ * The last eight 4 KiB sectors of the 4 MiB flash are carved out of the FLASH
  * region so firmware code/rodata can never grow into the persistent HSM state.
  * The linker errors if the binary exceeds the firmware region — a hard ceiling
  * that protects the config/key/counter sectors. See docs/FLASH_LAYOUT.md.
  *
  *   offset      size     purpose
- *   0x000000    ~4 MiB   FLASH  firmware code + rodata (XIP)  [ends at 0x3FA000]
+ *   0x000000    ~4 MiB   FLASH  firmware code + rodata (XIP)  [ends at 0x3F8000]
+ *   0x3F8000    4 KiB    TIME_A        ]
+ *   0x3F9000    4 KiB    TIME_B        ]
  *   0x3FA000    4 KiB    CONFIG_A      ]
  *   0x3FB000    4 KiB    CONFIG_B      ]
  *   0x3FC000    4 KiB    KEY_A         ]  reserved for hsm-core storage,
@@ -18,7 +20,7 @@
  * (.start_block below) embedded in the first 4 KiB of the image.
  */
 MEMORY {
-    FLASH : ORIGIN = 0x10000000, LENGTH = 0x3FA000
+    FLASH : ORIGIN = 0x10000000, LENGTH = 0x3F8000
     RAM   : ORIGIN = 0x20000000, LENGTH = 512K
 }
 

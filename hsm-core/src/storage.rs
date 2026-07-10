@@ -1,10 +1,11 @@
 //! Power-fail-safe flash storage.
 //!
-//! Two record types — [`DeviceConfig`] and [`KeyBlob`] — each live in an A/B
-//! sector pair. A record is `magic | version | seq | len | payload | crc32`;
-//! writes always target the *lower-seq* copy with `seq = max+1`, so the most
-//! recent valid record survives an interruption mid-write. Reads pick the
-//! highest-seq copy whose CRC validates.
+//! Structured records — [`DeviceConfig`], [`KeyBlob`], and the dispatcher's
+//! trusted-time-floor payload — each live in an A/B sector pair. A record is
+//! `magic | version | seq | len | payload | crc32`; writes always target the
+//! *lower-seq* copy with `seq = max+1`, so the most recent valid record
+//! survives an interruption mid-write. Reads pick the highest-seq copy whose
+//! CRC validates.
 //!
 //! The PIN attempt counter ([`crate::pin`]) uses the `PinCounter` sector
 //! directly with a bit-clear tick scheme and is handled there.
@@ -58,6 +59,32 @@ impl AbPair {
         })
     }
 
+    /// Read the latest valid record while distinguishing a genuinely erased
+    /// pair from corrupt/non-record data. A valid copy still wins over an
+    /// invalid peer (the expected torn-write recovery case), but if neither
+    /// copy is valid, only two fully erased sectors count as `None`.
+    pub fn read_latest_fail_closed<F: FlashStore>(
+        &self,
+        f: &mut F,
+    ) -> Result<Option<Vec<u8>>, HalError> {
+        let ra = read_record_state(f, self.a)?;
+        let rb = read_record_state(f, self.b)?;
+        match (ra, rb) {
+            (RecordState::Valid(sa, pa), RecordState::Valid(sb, pb)) => {
+                if sa >= sb {
+                    Ok(Some(pa))
+                } else {
+                    Ok(Some(pb))
+                }
+            }
+            (RecordState::Valid(_, payload), _) | (_, RecordState::Valid(_, payload)) => {
+                Ok(Some(payload))
+            }
+            (RecordState::Erased, RecordState::Erased) => Ok(None),
+            _ => Err(HalError::Flash),
+        }
+    }
+
     /// Write `payload` as a new record with `seq = max(existing)+1`, targeting
     /// the copy with the lower current seq so the newest prior record is
     /// preserved until this write completes.
@@ -80,6 +107,24 @@ impl AbPair {
     pub fn erase_both<F: FlashStore>(&self, f: &mut F) -> Result<(), HalError> {
         f.erase(self.a)?;
         f.erase(self.b)
+    }
+}
+
+enum RecordState {
+    Erased,
+    Valid(u32, Vec<u8>),
+    Invalid,
+}
+
+fn read_record_state<F: FlashStore>(f: &mut F, region: Region) -> Result<RecordState, HalError> {
+    let mut buf = vec![0u8; SECTOR_LEN];
+    f.read(region, &mut buf)?;
+    if buf.iter().all(|&byte| byte == 0xFF) {
+        Ok(RecordState::Erased)
+    } else if let Some((seq, payload)) = parse_record(&buf) {
+        Ok(RecordState::Valid(seq, payload))
+    } else {
+        Ok(RecordState::Invalid)
     }
 }
 
@@ -301,6 +346,8 @@ impl KeyBlob {
     }
 }
 
+/// The trusted-time-floor A/B pair.
+pub const TIME_FLOOR: AbPair = AbPair::new(Region::TimeA, Region::TimeB);
 /// The config A/B pair.
 pub const CONFIG: AbPair = AbPair::new(Region::ConfigA, Region::ConfigB);
 /// The key A/B pair.
@@ -358,6 +405,45 @@ mod tests {
         assert_eq!(
             CONFIG.read_latest(&mut f).unwrap().as_deref(),
             Some(&b"third"[..])
+        );
+    }
+
+    #[test]
+    fn time_floor_uses_the_same_power_fail_safe_records() {
+        let mut f = MockFlash::new();
+        TIME_FLOOR
+            .write(&mut f, &1_700_000_000i64.to_be_bytes())
+            .unwrap();
+        assert_eq!(
+            TIME_FLOOR.read_latest(&mut f).unwrap().as_deref(),
+            Some(&1_700_000_000i64.to_be_bytes()[..])
+        );
+    }
+
+    #[test]
+    fn fail_closed_read_distinguishes_erased_from_invalid_records() {
+        let mut f = MockFlash::new();
+        assert_eq!(TIME_FLOOR.read_latest_fail_closed(&mut f).unwrap(), None);
+
+        f.corrupt(Region::TimeA, 0, 0x00);
+        assert_eq!(
+            TIME_FLOOR.read_latest_fail_closed(&mut f),
+            Err(HalError::Flash)
+        );
+    }
+
+    #[test]
+    fn fail_closed_read_recovers_from_one_invalid_copy() {
+        let mut f = MockFlash::new();
+        TIME_FLOOR.write(&mut f, b"old").unwrap();
+        TIME_FLOOR.write(&mut f, b"new").unwrap();
+        f.corrupt(Region::TimeB, HEADER, 0x00);
+        assert_eq!(
+            TIME_FLOOR
+                .read_latest_fail_closed(&mut f)
+                .unwrap()
+                .as_deref(),
+            Some(&b"old"[..])
         );
     }
 
