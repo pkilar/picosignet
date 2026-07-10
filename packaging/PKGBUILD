@@ -1,0 +1,83 @@
+# Maintainer: Paul Kilar <pkilar@gmail.com>
+
+# Arch package for the PicoSignet host CLI/bridge daemon (the Go `host/` tool).
+# This packages ONLY the workstation-side `picosignet` binary; the RP2350
+# firmware is cross-built and flashed to the device separately (see the repo
+# Makefile: `make uf2` / `make flash-uf2`), it is not a system-installable file.
+#
+# There are no upstream release tags yet, so this is a VCS (-git) package that
+# builds from the GitHub default branch. When a tagged release exists, switch to
+# a versioned tarball source and drop the pkgver() function.
+
+pkgname=picosignet-git
+_pkgname=picosignet
+pkgver=r48.996252d
+pkgrel=1
+pkgdesc="Host CLI and bridge daemon for the PicoSignet RP2350 SSH certificate-signing HSM"
+arch=('x86_64' 'aarch64')
+url="https://github.com/pkilar/picosignet"
+license=('Apache-2.0 OR MIT')
+depends=('glibc')
+makedepends=('go>=1.26' 'git')
+optdepends=('picotool: firmware flashing and secure-boot/OTP provisioning (see docs/PROVISIONING.md)'
+            'openssh: ssh-keygen to inspect certificates the device signs')
+provides=('picosignet')
+conflicts=('picosignet')
+# Go binaries carry no useful debug split; skip the -debug subpackage.
+options=('!debug')
+source=("git+https://github.com/pkilar/picosignet.git"
+        '60-picosignet.rules')
+sha256sums=('SKIP'
+            '48480656cf84b684342edc4985982bb534fb18ce2d688eae11340b26ba8af49e')
+
+pkgver() {
+	cd "$_pkgname"
+	printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+	cd "$_pkgname/host"
+	# Populate the module cache while the network is available so build() can
+	# run offline / with -mod=readonly.
+	export GOPATH="$srcdir/gopath"
+	go mod download
+}
+
+build() {
+	cd "$_pkgname/host"
+	export GOPATH="$srcdir/gopath"
+	export CGO_CPPFLAGS="${CPPFLAGS}"
+	export CGO_CFLAGS="${CFLAGS}"
+	export CGO_CXXFLAGS="${CXXFLAGS}"
+	export CGO_LDFLAGS="${LDFLAGS}"
+	export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+	# Build inside host/ (the working copy is $srcdir/picosignet, so an
+	# -o "$srcdir/picosignet" would collide with that source directory).
+	go build -o picosignet ./cmd/picosignet
+}
+
+check() {
+	cd "$_pkgname/host"
+	export GOPATH="$srcdir/gopath"
+	go vet ./...
+	go test ./...
+}
+
+package() {
+	install -Dm755 "$_pkgname/host/picosignet" "$pkgdir/usr/bin/picosignet"
+
+	# udev rule: let the logged-in user open the device's CDC-ACM port without
+	# root or manual `uucp` group juggling (systemd-logind uaccess), plus a
+	# stable /dev/picosignet symlink for --port.
+	install -Dm644 "$srcdir/60-picosignet.rules" \
+		"$pkgdir/usr/lib/udev/rules.d/60-picosignet.rules"
+
+	cd "$_pkgname"
+	install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+	install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+
+	install -Dm644 README.md "$pkgdir/usr/share/doc/$_pkgname/README.md"
+	for _doc in docs/*.md; do
+		install -Dm644 "$_doc" "$pkgdir/usr/share/doc/$_pkgname/$(basename "$_doc")"
+	done
+}

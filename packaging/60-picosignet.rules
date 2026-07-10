@@ -1,0 +1,17 @@
+# PicoSignet — RP2350 USB SSH certificate-signing HSM (USB VID:PID 1209:000a).
+#
+# The device enumerates as a USB CDC-ACM serial port (product "PicoSignet"),
+# giving a /dev/ttyACM* node and a /dev/serial/by-id/*PicoSignet* symlink. By
+# default those nodes are owned root:uucp, so the picosignet CLI needs either
+# root or `uucp` group membership to open them. This rule grants the active
+# local user access via systemd-logind (uaccess), keeps a uucp/0660 fallback
+# for service/daemon users, and adds a stable /dev/picosignet symlink usable as
+# `picosignet --port /dev/picosignet`.
+#
+# sysfs exposes idVendor/idProduct as lowercase hex, so match "000a", not "000A".
+
+SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="000a", TAG+="uaccess", GROUP="uucp", MODE="0660", SYMLINK+="picosignet"
+
+# Also tag the raw USB device node (for tools that open the usb device directly,
+# e.g. picotool when the board is in application mode).
+SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="000a", TAG+="uaccess"

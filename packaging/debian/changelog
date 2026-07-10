@@ -1,0 +1,6 @@
+picosignet (0.0.0~git20260709.996252d) unstable; urgency=medium
+
+  * Initial Debian packaging of the host picosignet CLI/bridge daemon.
+  * Ship a udev rule for the 1209:000a CDC-ACM device.
+
+ -- Paul Kilar <pkilar@gmail.com>  Thu, 09 Jul 2026 20:00:00 -0400

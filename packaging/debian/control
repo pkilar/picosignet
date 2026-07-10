@@ -1,0 +1,25 @@
+Source: picosignet
+Section: utils
+Priority: optional
+Maintainer: Paul Kilar <pkilar@gmail.com>
+Build-Depends: golang-go (>= 2:1.26~), git
+Standards-Version: 4.6.2
+Homepage: https://github.com/pkilar/picosignet
+Rules-Requires-Root: no
+
+Package: picosignet
+Architecture: any
+Depends: libc6
+Recommends: openssh-client
+Suggests: picotool
+Description: host CLI and bridge daemon for the PicoSignet RP2350 SSH CA HSM
+ PicoSignet is an RP2350-based USB security key that acts as an SSH
+ certificate-signing HSM. This package provides the host-side picosignet
+ tool: a bridge daemon that exposes the device over VSOCK/TCP/Unix for the
+ cerberus ssh-cert-api service, plus a provisioning and management CLI.
+ .
+ Only the workstation-side binary is packaged; the RP2350 firmware is
+ cross-built and flashed to the device separately.
+ .
+ A udev rule grants the logged-in user access to the device's CDC-ACM serial
+ port (USB 1209:000a) without requiring root or dialout/uucp group changes.
