@@ -9,11 +9,14 @@ Both packages install the same layout:
 
 - the `picosignet` binary (`/usr/bin/picosignet`),
 - a udev rule (`60-picosignet.rules`) so the CLI can open the device's CDC-ACM
-  serial port without root, and
+  serial port without root,
+- a **disabled-by-default** systemd unit (`picosignet-bridge.service`) plus its
+  environment file (`/etc/picosignet/bridge.conf`) to run the bridge daemon, and
 - the licenses and `docs/*.md`.
 
-The udev rule is shared: both `PKGBUILD` and `debian/rules` install the single
-`packaging/60-picosignet.rules` file.
+The udev rule and the systemd unit are shared: both `PKGBUILD` and
+`debian/rules` install the single `packaging/60-picosignet.rules` and
+`packaging/picosignet-bridge.service` files.
 
 ## Layout
 
@@ -24,6 +27,8 @@ The udev rule is shared: both `PKGBUILD` and `debian/rules` install the single
 | `PKGBUILD` / `.SRCINFO`| Arch Linux (`makepkg`) package.                               |
 | `debian/`              | Debian/Ubuntu (`dpkg-buildpackage`) package.                  |
 | `60-picosignet.rules`  | udev rule, shared by both packages.                           |
+| `picosignet-bridge.service` | systemd unit for the bridge daemon, shared by both.      |
+| `picosignet-bridge.conf`    | environment file for the bridge unit (`/etc/picosignet/`).|
 
 ## Building
 
@@ -80,6 +85,32 @@ artifacts with `debian/rules clean` (via the symlink).
 The version derives from `debian/changelog`
 (`0.0.0~git<date>.<sha>`); bump it with a new changelog entry per build, or wire
 it to `git describe` once releases are tagged.
+
+## Bridge service
+
+`picosignet-bridge.service` runs `picosignet bridge`, exposing the device's
+newline-JSON protocol to clients such as `cerberus ssh-cert-api`. It is
+**installed disabled** — neither package enables or starts it. Turn it on once a
+device is attached:
+
+```sh
+sudo systemctl enable --now picosignet-bridge.service
+```
+
+Defaults and behaviour:
+
+- **Listener:** with no arguments the bridge listens on `vsock:5000` — the same
+  contract `ssh-cert-api` uses to reach a Nitro enclave. Override it by setting
+  `PICOSIGNET_BRIDGE_ARGS` in `/etc/picosignet/bridge.conf` (a conffile; edits
+  survive upgrades), e.g. `--listen unix:/run/picosignet/bridge.sock`, then
+  `systemctl restart picosignet-bridge.service`. `vsock` loopback on a bare host
+  needs the `vsock_loopback` kernel module.
+- **Device binding:** the unit is `BindsTo=dev-picosignet.device`, so it starts
+  only when the PicoSignet is plugged in and stops when it is removed. This
+  relies on the `TAG+="systemd"` in `60-picosignet.rules`.
+- **Isolation:** it runs as a `DynamicUser` in the `uucp` group (to open the
+  CDC-ACM node) under a strict sandbox (`ProtectSystem=strict`, seccomp
+  `@system-service`, etc.).
 
 ## udev rule
 

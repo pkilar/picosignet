@@ -31,6 +31,12 @@ binary-arch: build-arch
 	# udev rule (shared with the Arch package — one source of truth).
 	install -Dm644 packaging/60-picosignet.rules \
 		$(DESTDIR)/lib/udev/rules.d/60-picosignet.rules
+	# Bridge daemon: systemd unit + optional environment file. Shipped DISABLED
+	# — the maintainer scripts only daemon-reload, they never enable/start it.
+	install -Dm644 packaging/picosignet-bridge.service \
+		$(DESTDIR)/lib/systemd/system/picosignet-bridge.service
+	install -Dm644 packaging/picosignet-bridge.conf \
+		$(DESTDIR)/etc/picosignet/bridge.conf
 	# Copyright, Debian changelog, and docs.
 	install -Dm644 debian/copyright $(DOCDIR)/copyright
 	install -Dm644 debian/changelog $(DOCDIR)/changelog.Debian
@@ -39,8 +45,12 @@ binary-arch: build-arch
 	set -e; for f in docs/*.md; do \
 		install -Dm644 "$$f" "$(DOCDIR)/$$(basename $$f)"; \
 	done
-	# Control metadata + .deb assembly (root-owned, no fakeroot needed).
+	# Control metadata + maintainer scripts + .deb assembly (root-owned, no
+	# fakeroot needed). The env file under /etc is a registered conffile so
+	# admin edits survive upgrades.
 	install -d $(DESTDIR)/DEBIAN
+	echo /etc/picosignet/bridge.conf > $(DESTDIR)/DEBIAN/conffiles
+	install -m755 debian/postinst debian/prerm debian/postrm $(DESTDIR)/DEBIAN/
 	dpkg-gencontrol -p$(PKG) -P$(DESTDIR)
 	dpkg-deb --root-owner-group --build $(DESTDIR) ..
 
