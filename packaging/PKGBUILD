@@ -23,12 +23,18 @@ optdepends=('picotool: firmware flashing and secure-boot/OTP provisioning (see d
             'openssh: ssh-keygen to inspect certificates the device signs')
 provides=('picosignet')
 conflicts=('picosignet')
+# Admin edits to the bridge environment file must survive upgrades.
+backup=('etc/picosignet/bridge.conf')
 # Go binaries carry no useful debug split; skip the -debug subpackage.
 options=('!debug')
 source=("git+https://github.com/pkilar/picosignet.git"
-        '60-picosignet.rules')
+        '60-picosignet.rules'
+        'picosignet-bridge.service'
+        'picosignet-bridge.conf')
 sha256sums=('SKIP'
-            '48480656cf84b684342edc4985982bb534fb18ce2d688eae11340b26ba8af49e')
+            '793497ba29ad91a70b3411cd597bf970fb4e822389c0fa3113c6ca5580ca87e5'
+            'e66d35d02bf97f2d7d2c94065ce9e2e948330832ea852a9484905ee87a47d175'
+            '33654cfd56905da3a088e02f43ba29eada627110fb8700ceca506275e8a116b0')
 
 pkgver() {
 	cd "$_pkgname"
@@ -71,6 +77,13 @@ package() {
 	# stable /dev/picosignet symlink for --port.
 	install -Dm644 "$srcdir/60-picosignet.rules" \
 		"$pkgdir/usr/lib/udev/rules.d/60-picosignet.rules"
+
+	# Bridge daemon: systemd unit (disabled by default — pacman never enables
+	# units) plus its optional environment file for listener overrides.
+	install -Dm644 "$srcdir/picosignet-bridge.service" \
+		"$pkgdir/usr/lib/systemd/system/picosignet-bridge.service"
+	install -Dm644 "$srcdir/picosignet-bridge.conf" \
+		"$pkgdir/etc/picosignet/bridge.conf"
 
 	cd "$_pkgname"
 	install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"

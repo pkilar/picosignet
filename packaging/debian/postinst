@@ -1,0 +1,11 @@
+#!/bin/sh
+# picosignet postinst: make systemd aware of the new unit, but leave it
+# DISABLED. The bridge daemon is opt-in — the admin enables it deliberately
+# (systemctl enable --now picosignet-bridge.service) once a device is present.
+set -e
+
+if [ "$1" = "configure" ] && [ -d /run/systemd/system ]; then
+	systemctl --system daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

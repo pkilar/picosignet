@@ -14,9 +14,14 @@ pkgbase = picosignet-git
 	provides = picosignet
 	conflicts = picosignet
 	options = !debug
+	backup = etc/picosignet/bridge.conf
 	source = git+https://github.com/pkilar/picosignet.git
 	source = 60-picosignet.rules
+	source = picosignet-bridge.service
+	source = picosignet-bridge.conf
 	sha256sums = SKIP
-	sha256sums = 48480656cf84b684342edc4985982bb534fb18ce2d688eae11340b26ba8af49e
+	sha256sums = 793497ba29ad91a70b3411cd597bf970fb4e822389c0fa3113c6ca5580ca87e5
+	sha256sums = e66d35d02bf97f2d7d2c94065ce9e2e948330832ea852a9484905ee87a47d175
+	sha256sums = 33654cfd56905da3a088e02f43ba29eada627110fb8700ceca506275e8a116b0
 
 pkgname = picosignet-git

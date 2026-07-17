@@ -1,0 +1,20 @@
+#!/bin/sh
+# picosignet postrm: drop any admin-created enablement symlinks and let systemd
+# forget the unit. On purge, also remove the now-empty config directory (dpkg
+# removes the conffile itself).
+set -e
+
+if [ -d /run/systemd/system ]; then
+	case "$1" in
+	remove | purge)
+		systemctl --system disable picosignet-bridge.service >/dev/null 2>&1 || true
+		systemctl --system daemon-reload >/dev/null 2>&1 || true
+		;;
+	esac
+fi
+
+if [ "$1" = "purge" ]; then
+	rmdir /etc/picosignet 2>/dev/null || true
+fi
+
+exit 0

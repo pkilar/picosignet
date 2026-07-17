@@ -1,0 +1,51 @@
+[Unit]
+Description=PicoSignet HSM bridge (exposes the SSH-CA device for cerberus ssh-cert-api)
+Documentation=https://github.com/pkilar/picosignet
+# Bind the daemon to the physical device: it only starts once the PicoSignet is
+# plugged in and stops when it is unplugged. This requires the udev rule to tag
+# the port with "systemd" (see 60-picosignet.rules), which materialises the
+# dev-picosignet.device unit referenced here via the /dev/picosignet symlink.
+After=dev-picosignet.device
+BindsTo=dev-picosignet.device
+
+[Service]
+Type=simple
+# The bridge's own default is to listen on vsock:5000 — the same contract
+# ssh-cert-api uses to reach a Nitro enclave, so it "just works" as a drop-in
+# hardware signer. Override the listener(s) without editing this unit by setting
+# PICOSIGNET_BRIDGE_ARGS in the environment file, e.g. to serve a local socket:
+#   PICOSIGNET_BRIDGE_ARGS=--listen unix:/run/picosignet/bridge.sock
+EnvironmentFile=-/etc/picosignet/bridge.conf
+ExecStart=/usr/bin/picosignet bridge $PICOSIGNET_BRIDGE_ARGS
+Restart=on-failure
+RestartSec=2
+
+# Provide a stable, service-owned /run/picosignet for a unix-socket listener.
+RuntimeDirectory=picosignet
+RuntimeDirectoryMode=0750
+
+# --- hardening -------------------------------------------------------------
+# Run as a transient unprivileged user; join uucp so it can open the CDC-ACM
+# node (root:uucp 0660 via 60-picosignet.rules).
+DynamicUser=yes
+SupplementaryGroups=uucp
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# vsock (default), plus unix/tcp for overridden listeners. The serial and vsock
+# device nodes must stay visible, so PrivateDevices is deliberately not set.
+RestrictAddressFamilies=AF_UNIX AF_VSOCK AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

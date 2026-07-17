@@ -8,9 +8,13 @@
 # for service/daemon users, and adds a stable /dev/picosignet symlink usable as
 # `picosignet --port /dev/picosignet`.
 #
+# TAG+="systemd" materialises a dev-picosignet.device unit (via the symlink) so
+# picosignet-bridge.service can BindTo the hardware — starting when the device
+# is plugged in and stopping when it is removed.
+#
 # sysfs exposes idVendor/idProduct as lowercase hex, so match "000a", not "000A".
 
-SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="000a", TAG+="uaccess", GROUP="uucp", MODE="0660", SYMLINK+="picosignet"
+SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="000a", TAG+="uaccess", TAG+="systemd", GROUP="uucp", MODE="0660", SYMLINK+="picosignet"
 
 # Also tag the raw USB device node (for tools that open the usb device directly,
 # e.g. picotool when the board is in application mode).
