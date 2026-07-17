@@ -379,8 +379,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             return Response::error("internal error: entropy unavailable");
         }
 
-        let mut nonce = [0u8; 32];
-        self.drbg.fill_bytes(&mut nonce);
+        let nonce = self.drbg.random_array::<32>();
         let serial = self.drbg.next_u64();
         let valid_after = (now as u64).wrapping_sub(300);
         let valid_before = (now as u64).wrapping_add((v.duration_ns / 1_000_000_000) as u64);
@@ -557,8 +556,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 if self.prepare_keygen_entropy().is_err() {
                     return HsmResponse::err(ERR_ENTROPY, "entropy source unhealthy");
                 }
-                let mut salt = [0u8; 16];
-                self.drbg.fill_bytes(&mut salt);
+                let salt = self.drbg.random_array::<16>();
                 let max_retries = req.max_retries.unwrap_or(10);
                 if max_retries == 0 {
                     return HsmResponse::err(
@@ -578,8 +576,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                     Ok(k) => k,
                     Err(_) => return HsmResponse::err(ERR_INTERNAL, "key derivation failed"),
                 };
-                let mut nonce = [0u8; 12];
-                self.drbg.fill_bytes(&mut nonce);
+                let nonce = self.drbg.random_array::<12>();
                 let blob = wrap_seed(&kek, &seed, &pubkey, WrapType::PinKek, &salt, &nonce);
 
                 // Write the key first, then config: a config present on boot
@@ -653,8 +650,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                 };
                 let (seed, ca) = CaKey::generate(&mut self.drbg);
                 let pubkey = ca.public_bytes();
-                let mut nonce = [0u8; 12];
-                self.drbg.fill_bytes(&mut nonce);
+                let nonce = self.drbg.random_array::<12>();
                 let blob = wrap_seed(&kek, &seed, &pubkey, wrap_type, &salt, &nonce);
                 if storage::KEY
                     .write(&mut self.flash, &blob.to_bytes())
@@ -868,8 +864,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
         if self.prepare_keygen_entropy().is_err() {
             return HsmResponse::err(ERR_ENTROPY, "entropy source unhealthy");
         }
-        let mut new_salt = [0u8; 16];
-        self.drbg.fill_bytes(&mut new_salt);
+        let new_salt = self.drbg.random_array::<16>();
         let cfg = self.config.expect("prod implies config");
         let secret = match self.flash.device_secret() {
             Ok(s) => s,
@@ -883,8 +878,7 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
             Some(p) => p,
             None => return HsmResponse::err(ERR_NO_KEY, "no CA key present"),
         };
-        let mut nonce = [0u8; 12];
-        self.drbg.fill_bytes(&mut nonce);
+        let nonce = self.drbg.random_array::<12>();
         // The new salt rides inside the key blob, so rotation is a single atomic
         // KEY-record write: there is no separate config write that could tear
         // and strand the seed under a salt the device can no longer reconstruct.
