@@ -6,7 +6,7 @@ pkgbase = picosignet-git
 	arch = x86_64
 	arch = aarch64
 	license = Apache-2.0 OR MIT
-	makedepends = go>=1.26
+	makedepends = go>=1.27
 	makedepends = git
 	depends = glibc
 	optdepends = picotool: firmware flashing and secure-boot/OTP provisioning (see docs/PROVISIONING.md)

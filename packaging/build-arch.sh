@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the Arch Linux package (.pkg.tar.zst) into packaging/dist/.
 #
-# Requires: makepkg (pacman), a Go toolchain (>= 1.26), git.
+# Requires: makepkg (pacman), a Go toolchain (>= 1.27), git.
 # Extra makepkg flags pass through, e.g.:  ./build-arch.sh --nocheck
 set -euo pipefail
 

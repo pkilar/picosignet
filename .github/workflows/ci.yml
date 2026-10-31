@@ -48,7 +48,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache-dependency-path: host/go.sum
       - working-directory: host
         run: |
@@ -64,7 +64,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache-dependency-path: tests/differential/go.sum
       - working-directory: tests/differential
         run: go test ./...

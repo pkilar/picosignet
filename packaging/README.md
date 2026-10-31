@@ -65,7 +65,7 @@ Skip the tests with `makepkg -si --nocheck`. Regenerate `.SRCINFO` after editing
 
 `debian/` is a native package that builds straight from this tree. It is
 deliberately **debhelper-free** — `debian/rules` needs only `dpkg-dev` and a Go
-toolchain (>= 1.26), so it builds anywhere Go is available rather than requiring
+toolchain (>= 1.27), so it builds anywhere Go is available rather than requiring
 a matching `debhelper-compat`.
 
 `dpkg-buildpackage` expects `debian/` at the source-tree root, so symlink (or

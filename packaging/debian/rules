@@ -1,6 +1,6 @@
 #!/usr/bin/make -f
 # Debhelper-free rules for the picosignet host CLI. Needs only dpkg-dev and a
-# Go toolchain (>= 1.26); it deliberately avoids debhelper so it builds on any
+# Go toolchain (>= 1.27); it deliberately avoids debhelper so it builds on any
 # host with Go, not just one with a matching debhelper-compat installed.
 
 PKG    := picosignet

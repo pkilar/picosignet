@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the Debian package (.deb) into packaging/dist/.
 #
-# Requires: dpkg-buildpackage (dpkg-dev), a Go toolchain (>= 1.26), git.
+# Requires: dpkg-buildpackage (dpkg-dev), a Go toolchain (>= 1.27), git.
 # Extra dpkg-buildpackage flags pass through, e.g.:
 #   DEB_BUILD_OPTIONS=nocheck ./build-deb.sh
 set -euo pipefail
