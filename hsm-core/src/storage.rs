@@ -293,7 +293,8 @@ pub enum WrapType {
 /// `salt` is stored here (not in [`DeviceConfig`]) so the wrapped seed and the
 /// salt that derives its KEK form one atomic record — a PIN rotation rewrites a
 /// single KEY record and can never leave the seed wrapped under a salt that the
-/// active config no longer matches. (`salt` is unused/zero for dev-mode wraps.)
+/// active config no longer matches. Dev-mode wraps don't use `salt`; they fill it
+/// with random bytes (blobs written by older firmware hold zeros).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyBlob {
     pub wrap_type: WrapType,

@@ -66,7 +66,8 @@ anchor, and the persisted floor advances only from monotonic elapsed time.
 
 - `pubkey` is stored **in the clear** so `getPublicKey` works while locked.
 - `ciphertext` is the 32-byte Ed25519 seed, AEAD-sealed with ChaCha20-Poly1305.
-- `salt` is the Argon2 salt that derives the prod KEK (zero for dev wraps). It
+- `salt` is the Argon2 salt that derives the prod KEK. Dev wraps don't use it
+  and fill it with random bytes (blobs written by older firmware hold zeros). It
   lives **in the key record, not the config**, so a PIN rotation rewrites a
   single atomic record: the wrapped seed and the salt needed to unwrap it can
   never be torn apart across a power loss (which previously could strand the CA

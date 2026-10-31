@@ -651,17 +651,21 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
                     return HsmResponse::err(ERR_ENTROPY, "entropy source unhealthy");
                 }
                 // The rotated blob must carry the salt that derived the cached
-                // KEK (prod); dev wraps use no salt.
-                let salt = match wrap_type {
-                    WrapType::DevKek => [0u8; 16],
-                    WrapType::PinKek => match self.wrap_salt {
-                        Some(s) => s,
-                        None => return HsmResponse::err(ERR_LOCKED, "unlock the device first"),
-                    },
+                // KEK (prod).
+                let pin_salt = match (wrap_type, self.wrap_salt) {
+                    (WrapType::DevKek, _) => None,
+                    (WrapType::PinKek, Some(s)) => Some(s),
+                    (WrapType::PinKek, None) => {
+                        return HsmResponse::err(ERR_LOCKED, "unlock the device first");
+                    }
                 };
                 let (seed, ca) = CaKey::generate(&mut self.drbg);
                 let pubkey = ca.public_bytes();
                 let nonce = self.drbg.random_array::<12>();
+                // The dev KEK takes no salt, so nothing reads a dev blob's salt.
+                // Fill it from the DRBG rather than store a constant; draw it
+                // last so the seed and nonce draws are unchanged.
+                let salt = pin_salt.unwrap_or_else(|| self.drbg.random_array::<16>());
                 let blob = wrap_seed(&kek, &seed, &pubkey, wrap_type, &salt, &nonce);
                 if storage::KEY
                     .write(&mut self.flash, &blob.to_bytes())
@@ -1978,6 +1982,37 @@ mod tests {
         let s = call(&mut h2, r#"{"hsm":{"status":{}}}"#);
         assert_eq!(s["hsm"]["status"]["keyPresent"], true);
         assert_eq!(s["hsm"]["status"]["unlocked"], true); // dev key auto-loads
+    }
+
+    #[test]
+    fn dev_wrap_fills_unused_salt_from_drbg() {
+        // The dev KEK takes no salt, so a dev blob's salt is filler. It must
+        // come from the DRBG, not a constant, and must not stop the key from
+        // loading after a reboot.
+        fn stored_salt(flash: &mut MockFlash) -> [u8; 16] {
+            let bytes = storage::KEY
+                .read_latest(flash)
+                .unwrap()
+                .expect("key record");
+            KeyBlob::from_bytes(&bytes).expect("valid key blob").salt
+        }
+        let mut flash = MockFlash::new();
+        let pubkey = {
+            let mut h = Hsm::boot(MockEntropy::new(1), MockClock::new(), &mut flash);
+            call(&mut h, r#"{"hsm":{"init":{"mode":"dev"}}}"#);
+            call(&mut h, r#"{"hsm":{"generateKey":{}}}"#)["hsm"]["generateKey"]["publicKey"].clone()
+        };
+        let first = stored_salt(&mut flash);
+        assert_ne!(first, [0u8; 16]);
+        {
+            let mut h = Hsm::boot(MockEntropy::new(2), MockClock::new(), &mut flash);
+            let s = call(&mut h, r#"{"hsm":{"status":{}}}"#);
+            assert_eq!(s["hsm"]["status"]["unlocked"], true);
+            let p = call(&mut h, r#"{"hsm":{"getPublicKey":{}}}"#);
+            assert_eq!(p["hsm"]["getPublicKey"]["publicKey"], pubkey);
+            call(&mut h, r#"{"hsm":{"generateKey":{"force":true}}}"#);
+        }
+        assert_ne!(stored_salt(&mut flash), first);
     }
 
     #[test]

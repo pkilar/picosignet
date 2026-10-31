@@ -84,8 +84,9 @@ fn aad(wrap_type: WrapType, pubkey: &[u8; 32]) -> [u8; 33] {
 
 /// Wrap `seed` under `kek`, producing a [`KeyBlob`]. `nonce` must be unique per
 /// (key, message) — the caller supplies a fresh random nonce from the DRBG.
-/// `salt` is the Argon2 salt that derived `kek` (zero for dev wraps); it is
-/// stored in the blob so the seed and its salt persist as one atomic record.
+/// `salt` is the Argon2 salt that derived `kek`; it is stored in the blob so the
+/// seed and its salt persist as one atomic record. The dev KEK takes no salt, so
+/// for dev wraps the caller passes random filler that nothing reads.
 pub fn wrap_seed(
     kek: &[u8; 32],
     seed: &[u8; 32],
