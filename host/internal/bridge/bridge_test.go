@@ -18,6 +18,8 @@ import (
 
 	"github.com/pkilar/cerberus/messages"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/pkilar/picosignet/host/internal/hsmproto"
 )
 
 // simConn drives the hsm-sim binary as a device.Conn, so the bridge can be
@@ -27,6 +29,7 @@ type simConn struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
+	sent   int // requests written to the device
 }
 
 func newSimConn(t *testing.T) *simConn {
@@ -67,6 +70,7 @@ func newSimConn(t *testing.T) *simConn {
 func (s *simConn) RoundTrip(_ context.Context, req []byte) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.sent++
 	if _, err := s.stdin.Write(append(req, '\n')); err != nil {
 		return nil, err
 	}
@@ -79,6 +83,12 @@ func (s *simConn) RoundTrip(_ context.Context, req []byte) ([]byte, error) {
 
 func (s *simConn) Close() error { return nil }
 
+func (s *simConn) requests() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sent
+}
+
 func (s *simConn) provisionDev(t *testing.T) {
 	t.Helper()
 	for _, r := range []string{
@@ -89,6 +99,32 @@ func (s *simConn) provisionDev(t *testing.T) {
 			t.Fatalf("provisioning: %v", err)
 		}
 	}
+}
+
+// snapshot reads the device's lifecycle state and CA public key straight from
+// the simulator, bypassing the bridge.
+func (s *simConn) snapshot(t *testing.T) (state, publicKey string) {
+	t.Helper()
+	call := func(req string) *hsmproto.ResponseBody {
+		raw, err := s.RoundTrip(context.Background(), []byte(req))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var resp hsmproto.Response
+		if err := json.Unmarshal(raw, &resp); err != nil || resp.Hsm == nil {
+			t.Fatalf("unexpected device response %s (%v)", raw, err)
+		}
+		return resp.Hsm
+	}
+	st := call(`{"hsm":{"status":{}}}`).Status
+	if st == nil {
+		t.Fatal("device status response has no status")
+	}
+	// No key (for example after an erase) reads as "".
+	if pk := call(`{"hsm":{"getPublicKey":{}}}`).GetPublicKey; pk != nil {
+		publicKey = pk.PublicKey
+	}
+	return st.State, publicKey
 }
 
 // startBridge runs a bridge over a unix socket and returns its path.
@@ -240,6 +276,47 @@ func TestBridgeFirewallsManagement(t *testing.T) {
 	}
 	if resp.Error != "management commands are not permitted over the network" {
 		t.Fatalf("expected firewall rejection, got %q", raw)
+	}
+}
+
+// Regression test: the firewall must judge the request the device will run,
+// not the client's bytes. The device parses with serde, which fills the
+// request struct from a JSON array by position (the fifth element is `hsm`)
+// and matches keys exactly, while encoding/json ignores case and lets the
+// last of two equal keys win. The first three lines used to reach the device
+// and erase its CA key; the last two are near variants.
+func TestBridgeFirewallsDisguisedManagement(t *testing.T) {
+	sim := newSimConn(t)
+	sim.provisionDev(t)
+	state, key := sim.snapshot(t)
+	sock := startBridge(t, sim, false)
+	// The bridge accepts connections only after its startup time sync, so
+	// once this ping is answered, every device request comes from a client.
+	dialAndExchange(t, sock, []byte(`{"ping":{}}`))
+	sent := sim.requests()
+
+	const mgmtErr = "management commands are not permitted over the network"
+	for _, tc := range []struct{ line, wantErr string }{
+		{`[null,null,null,null,{"factoryReset":{"confirm":"ERASE"}}]`, "json.Unmarshal failed: request must be a JSON object"},
+		{`{"hsm":{"factoryReset":{"confirm":"ERASE"}},"HSM":null}`, mgmtErr},
+		{`{"hsm":{"factoryReset":{"confirm":"ERASE"}},"hſm":null}`, mgmtErr},
+		{`{"hsm":{"factoryReset":{"confirm":"ERASE"}},"hsm":null}`, mgmtErr},
+		{`{"\u0068sm":{"factoryReset":{"confirm":"ERASE"}}}`, mgmtErr},
+	} {
+		raw := dialAndExchange(t, sock, []byte(tc.line))
+		var resp struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil || resp.Error != tc.wantErr {
+			t.Errorf("%s: got %s, want error %q", tc.line, raw, tc.wantErr)
+		}
+	}
+	// The bridge itself refuses these; the device's own check is a second layer.
+	if n := sim.requests() - sent; n != 0 {
+		t.Errorf("%d firewalled line(s) reached the device", n)
+	}
+	if s, k := sim.snapshot(t); s != state || k != key {
+		t.Fatalf("device changed behind the firewall: state %s -> %s, key %q -> %q", state, s, key, k)
 	}
 }
 

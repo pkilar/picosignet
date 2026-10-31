@@ -5,7 +5,13 @@
 package hsmproto
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"slices"
+	"strings"
 )
 
 // Envelope is the top-level request as the device sees it: a management `hsm`
@@ -168,17 +174,104 @@ func (r *Request) Marshal() ([]byte, error) {
 	return json.Marshal(Envelope{Hsm: r})
 }
 
-// IsManagementLine reports whether a raw request line carries a top-level `hsm`
-// field. The bridge uses this to firewall device management away from network
-// clients.
+// signerVariants are the cerberus signer-path request variants (the fields of
+// messages.Request), in the order SignerLine writes them.
+var signerVariants = [...]string{"loadKeySigner", "signSshKey", "ping", "getEnclaveMetrics"}
+
+// ErrManagementLine reports a request line with a top-level key that is, or
+// could be read as, the `hsm` management variant.
+var ErrManagementLine = errors.New("request has an hsm key")
+
+// SignerLine checks a request line from a client that may not send management
+// commands. It returns the line to send to the device in place of the client's
+// bytes.
+//
+// The device parses requests with serde, which disagrees with encoding/json on
+// some input. serde fills a struct from a JSON array by field position, and it
+// matches keys exactly where encoding/json ignores case and lets the last of
+// two equal keys win. So asking encoding/json whether `hsm` is set does not say
+// what the device will run. SignerLine requires one JSON object. It refuses any
+// key equal to "hsm" in any letter case, whatever its value, and a signer-path
+// key that appears twice, as serde does. It then rebuilds the line from the
+// signer-path variants alone and drops other keys, which the device ignores
+// anyway.
+func SignerLine(line []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(line))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, parseError(err)
+	}
+	if tok != json.Delim('{') {
+		return nil, errors.New("request must be a JSON object")
+	}
+	var kept [len(signerVariants)]json.RawMessage
+	// Values that are dropped all decode into one reused buffer, so a line
+	// padded with unknown keys costs no more than its length.
+	var dropped json.RawMessage
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, parseError(err)
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return nil, errors.New("request must be a JSON object")
+		}
+		if strings.EqualFold(key, "hsm") {
+			return nil, ErrManagementLine
+		}
+		dst := &dropped
+		if i := slices.Index(signerVariants[:], key); i >= 0 {
+			if kept[i] != nil {
+				return nil, fmt.Errorf("duplicate key %q", key)
+			}
+			dst = &kept[i]
+		}
+		if err := dec.Decode(dst); err != nil {
+			return nil, parseError(err)
+		}
+	}
+	if tok, err := dec.Token(); err != nil {
+		return nil, parseError(err)
+	} else if tok != json.Delim('}') {
+		return nil, errors.New("request must be a JSON object")
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("unexpected data after the request object")
+	}
+
+	var out bytes.Buffer
+	out.WriteByte('{')
+	for i, k := range signerVariants {
+		if kept[i] == nil {
+			continue
+		}
+		if out.Len() > 1 {
+			out.WriteByte(',')
+		}
+		out.WriteString(`"` + k + `":`)
+		// Compact drops whitespace without escaping HTML, so string values reach
+		// the device byte for byte.
+		if err := json.Compact(&out, kept[i]); err != nil {
+			return nil, parseError(err)
+		}
+	}
+	out.WriteByte('}')
+	return out.Bytes(), nil
+}
+
+// parseError reports a truncated line the way json.Unmarshal does.
+func parseError(err error) error {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return errors.New("unexpected end of JSON input")
+	}
+	return err
+}
+
+// IsManagementLine reports whether a listener that does not allow management
+// must refuse line. It fails closed: any line SignerLine rejects counts,
+// including one that is not valid JSON.
 func IsManagementLine(line []byte) bool {
-	var probe struct {
-		Hsm json.RawMessage `json:"hsm"`
-	}
-	if err := json.Unmarshal(line, &probe); err != nil {
-		return false
-	}
-	// A literal `null` deserializes to an absent command on the device, so it is
-	// not a management line.
-	return len(probe.Hsm) > 0 && string(probe.Hsm) != "null"
+	_, err := SignerLine(line)
+	return err != nil
 }
