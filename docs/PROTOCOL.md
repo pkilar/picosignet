@@ -6,7 +6,9 @@ spec.
 
 ## Framing
 
-- One JSON object per line, terminated by `\n` (0x0A), UTF-8.
+- One JSON object per line, terminated by `\n` (0x0A), UTF-8. A line that is
+  not a JSON object (an array, for example) is answered with
+  `{"error":"json.Unmarshal failed: request must be a JSON object"}`.
 - Request = exactly one variant set (see below). The device rejects a line with
   more than one signer-path/`hsm` variant.
 - The device caps a request line at **16 KiB** (the enclave caps at 256 KiB —
@@ -78,6 +80,16 @@ A fifth request variant carries device provisioning/lifecycle. Management
 errors stay top-level). The bridge firewalls these away from network clients
 by default; see `PROVISIONING.md` for the per-listener `+mgmt` opt-in and
 `--allow-remote-mgmt`.
+
+On a listener without management, the bridge never forwards the client's line
+as is. The line must be one JSON object, and a key equal to `hsm` in any letter
+case is refused with
+`{"error":"management commands are not permitted over the network"}`. The
+device then gets a rebuilt line that holds only the four signer-path variants;
+other keys are dropped, as the device would ignore them anyway. A line that
+fails these checks for any other reason, a repeated signer-path key included,
+is answered by the bridge with `{"error":"json.Unmarshal failed: …"}` and never
+reaches the device.
 
 Error object: `{"code":"ERR_*","message":"…","remainingAttempts":N,"backoffMs":N}`
 (the last two only on PIN failures/backoff).

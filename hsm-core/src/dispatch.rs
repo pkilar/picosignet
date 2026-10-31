@@ -289,6 +289,17 @@ impl<E: EntropySource, M: Monotonic, F: FlashStore> Hsm<E, M, F> {
     }
 
     fn handle(&mut self, line: &[u8]) -> Response {
+        // Only a JSON object is a request. serde's derived `Deserialize` would
+        // also fill `Request` from a JSON array by field position, and a front
+        // end that inspects requests by key, such as the bridge's management
+        // firewall, would not see an `hsm` command hidden in one.
+        let first = line
+            .iter()
+            .copied()
+            .find(|&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'));
+        if first != Some(b'{') {
+            return Response::error("json.Unmarshal failed: request must be a JSON object");
+        }
         let req: Request = match serde_json::from_slice(line) {
             Ok(r) => r,
             Err(e) => return Response::error(format!("json.Unmarshal failed: {e}")),
@@ -1459,6 +1470,37 @@ mod tests {
         );
         let u = call(&mut h, r#"{}"#);
         assert_eq!(u["error"], "unexpected command");
+    }
+
+    #[test]
+    fn request_must_be_a_json_object() {
+        let mut h = boot();
+        call(&mut h, r#"{"hsm":{"init":{"mode":"dev"}}}"#);
+        let g = call(&mut h, r#"{"hsm":{"generateKey":{}}}"#);
+        let ca_line = g["hsm"]["generateKey"]["publicKey"].clone();
+
+        // serde would read an array into `Request` by field position; the
+        // fifth element is `hsm`.
+        for line in [
+            r#"[null,null,null,null,{"factoryReset":{"confirm":"ERASE"}}]"#,
+            r#" [null,null,null,null,{"generateKey":{"force":true}}]"#,
+            "null",
+            r#""ping""#,
+            "",
+        ] {
+            let r = call(&mut h, line);
+            assert_eq!(
+                r["error"], "json.Unmarshal failed: request must be a JSON object",
+                "line {line:?}"
+            );
+        }
+        assert_eq!(h.state(), DeviceState::DevReady);
+        let p = call(&mut h, r#"{"hsm":{"getPublicKey":{}}}"#);
+        assert_eq!(p["hsm"]["getPublicKey"]["publicKey"], ca_line);
+
+        // JSON whitespace before the object is still fine.
+        let s = call(&mut h, " \t\r\n{\"hsm\":{\"status\":{}}}");
+        assert_eq!(s["hsm"]["status"]["state"], "devReady");
     }
 
     #[test]

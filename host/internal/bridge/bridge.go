@@ -194,16 +194,29 @@ func (b *bridge) handleConn(ctx context.Context, conn net.Conn, listenerAllowsMg
 }
 
 // forward applies the management firewall, then relays the line to the
-// device. A line is allowed through if either the process-wide
-// AllowRemoteMgmt flag is set, or the listener this connection arrived on was
-// specifically tagged "+mgmt" — so opting one trusted listener in doesn't
-// silently open every other listener in the same bridge invocation.
+// device. Management is allowed if either the process-wide AllowRemoteMgmt
+// flag is set, or the listener this connection arrived on was specifically
+// tagged "+mgmt" — so opting one trusted listener in doesn't silently open
+// every other listener in the same bridge invocation. Otherwise the device
+// gets hsmproto.SignerLine's rebuilt copy of the request, never the client's
+// own bytes, so it cannot read a command the firewall did not see.
 func (b *bridge) forward(ctx context.Context, line []byte, listenerAllowsMgmt bool) []byte {
-	if !(b.allowRemoteMgmt || listenerAllowsMgmt) && hsmproto.IsManagementLine(line) {
-		return errorLine("management commands are not permitted over the network")
+	var req []byte
+	if b.allowRemoteMgmt || listenerAllowsMgmt {
+		// Copy: scanner.Bytes() is only valid until the next Scan.
+		req = append([]byte(nil), line...)
+	} else {
+		var err error
+		req, err = hsmproto.SignerLine(line)
+		switch {
+		case errors.Is(err, hsmproto.ErrManagementLine):
+			return errorLine("management commands are not permitted over the network")
+		case err != nil:
+			// The prefix the device and the enclave use for a line that does
+			// not parse.
+			return errorLine("json.Unmarshal failed: " + err.Error())
+		}
 	}
-	// Copy: scanner.Bytes() is only valid until the next Scan.
-	req := append([]byte(nil), line...)
 	resp, err := b.conn.RoundTrip(ctx, req)
 	if err != nil {
 		return errorLine(fmt.Sprintf("device error: %v", err))
