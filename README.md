@@ -87,7 +87,7 @@ make flash        # flash an attached probe via probe-rs
 make hil          # full dev+prod flow on a real device (see tests/hil)
 ```
 
-Toolchain: stable Rust with the `thumbv8m.main-none-eabihf` target, Go 1.26+,
+Toolchain: stable Rust with the `thumbv8m.main-none-eabihf` target, Go 1.27+,
 `picotool` (UF2 conversion, signing, OTP provisioning), and (for the golden/HIL
 checks) `ssh-keygen`.
 

@@ -18,7 +18,7 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/pkilar/picosignet"
 license=('Apache-2.0 OR MIT')
 depends=('glibc')
-makedepends=('go>=1.26' 'git')
+makedepends=('go>=1.27' 'git')
 optdepends=('picotool: firmware flashing and secure-boot/OTP provisioning (see docs/PROVISIONING.md)'
             'openssh: ssh-keygen to inspect certificates the device signs')
 provides=('picosignet')
